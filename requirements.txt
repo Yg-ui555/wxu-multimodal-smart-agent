@@ -1,0 +1,14 @@
+langchain
+langchain-community
+chromadb
+pypdf
+python-docx
+beautifulsoup4
+requests
+gradio
+python-dotenv
+apscheduler
+ultralytics
+ragas
+pandas
+pillow
