@@ -20,3 +20,11 @@ data/images/
 # 日志、临时文件
 *.log
 *.tmp
+
+# 文档（知识库）
+data/docs/
+
+# IDE
+.idea/
+.vscode/
+*.iml
