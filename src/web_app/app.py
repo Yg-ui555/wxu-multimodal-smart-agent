@@ -366,6 +366,7 @@ class RAGApp:
             score_threshold=0.0,
             use_bm25=True,
             use_reranker=True,
+            reranker_model='BAAI/bge-reranker-v2-m3',  # 2026-09-20 启用（首次启动会下载 ~2.27 GB）
             use_hyde=False,  # 2026-09-18：先关闭，等 qa_system 建好再开启
             hyde_llm=None,
         )
