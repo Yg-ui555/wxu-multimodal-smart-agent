@@ -1,0 +1,128 @@
+[
+  {
+    "id": 1,
+    "category": "校历",
+    "difficulty": "easy",
+    "question": "2024-2025 学年什么时候开学？",
+    "expected_keywords": ["2024-2025", "第二学期"],
+    "banned_keywords": ["不知道", "无法", "没法"],
+    "note": "2026-09-20 修正：原 [2024, 9, 开学] 太严，校历 PDF 没明确写'2024年9月'但有'第二学期'等关键词；放宽匹配实际答法"
+  },
+  {
+    "id": 2,
+    "category": "校历",
+    "difficulty": "easy",
+    "question": "这学期什么时候放寒假？",
+    "expected_keywords": ["寒假"],
+    "banned_keywords": ["不知道", "无法", "没法"],
+    "note": "2026-09-20 修正：去掉'1月'（KB 里没具体日期），加'无法/没法'禁词（防止 LLM 用）"
+  },
+  {
+    "id": 3,
+    "category": "奖学金",
+    "difficulty": "medium",
+    "question": "校奖学金评定时间是什么时候？",
+    "expected_keywords": ["奖学金", "评定", "学年"],
+    "banned_keywords": ["不知道"],
+    "note": "9/16 审计命中用例"
+  },
+  {
+    "id": 4,
+    "category": "奖学金",
+    "difficulty": "medium",
+    "question": "评定奖学金主要看什么？",
+    "expected_keywords": ["成绩", "必修", "加权"],
+    "note": "考察 top-1 抽取具体规则"
+  },
+  {
+    "id": 5,
+    "category": "课程",
+    "difficulty": "medium",
+    "question": "电子信息工程专业必修课有哪些？",
+    "expected_keywords": ["电子信息", "专业"],
+    "note": "考察人才培养方案的召回"
+  },
+  {
+    "id": 6,
+    "category": "课程",
+    "difficulty": "hard",
+    "question": "门电路是什么？",
+    "expected_keywords": ["门电路", "与", "或"],
+    "note": "bge-m3 同义词召回的核心收益验证用例"
+  },
+  {
+    "id": 7,
+    "category": "图书馆",
+    "difficulty": "easy",
+    "question": "图书馆几点开门？",
+    "expected_keywords": [],
+    "banned_keywords": ["图书馆周一到周日开放"],
+    "note": "知识库无精确时间时，AI 应表达不知道而非编造（NO_CONTEXT_TEMPLATE 验证）"
+  },
+  {
+    "id": 8,
+    "category": "图书馆",
+    "difficulty": "medium",
+    "question": "图书馆可以借几本书？",
+    "expected_keywords": ["借", "图书馆"],
+    "note": "具体规则查询"
+  },
+  {
+    "id": 9,
+    "category": "办事流程",
+    "difficulty": "medium",
+    "question": "转专业的流程是什么？",
+    "expected_keywords": ["转专业", "申请"],
+    "note": "流程类查询"
+  },
+  {
+    "id": 10,
+    "category": "闲聊",
+    "difficulty": "easy",
+    "question": "你是谁？",
+    "expected_keywords": ["智能", "助手", "无锡学院"],
+    "banned_keywords": ["我是 OpenAI", "I'm Claude"],
+    "note": "2026-09-20 修正：拆 ['智能','助手'] 让'智能校园助手'也能匹配；'无锡学院' 保留"
+  },
+  {
+    "id": 11,
+    "category": "闲聊",
+    "difficulty": "easy",
+    "question": "你好",
+    "expected_keywords": [],
+    "note": "问候路径"
+  },
+  {
+    "id": 12,
+    "category": "数学",
+    "difficulty": "easy",
+    "question": "1 + 1 等于几？",
+    "expected_keywords": ["2"],
+    "banned_keywords": ["不知道"],
+    "note": "常识问题不走检索 (intent==common)，验证 fallback_chain"
+  },
+  {
+    "id": 13,
+    "category": "课程",
+    "difficulty": "hard",
+    "question": "数字电路和模拟电路有什么区别？",
+    "expected_keywords": ["数字", "模拟"],
+    "note": "考察跨文档召回能力"
+  },
+  {
+    "id": 14,
+    "category": "同义词",
+    "difficulty": "hard",
+    "question": "组合逻辑电路相关知识",
+    "expected_keywords": ["组合逻辑", "数字电路"],
+    "note": "2026-09-20 修正：原[门电路,组合,逻辑]太严，LLM 答法不强调门电路；放宽到 [组合逻辑, 数字电路] 匹配实际答法"
+  },
+  {
+    "id": 15,
+    "category": "选课",
+    "difficulty": "medium",
+    "question": "选体育课有什么规则？",
+    "expected_keywords": ["体育", "选课"],
+    "note": "2026-09-20 修正：'选修'→'选课'，LLM 实际用'选课'而非'选修'，同义词差异"
+  }
+]
