@@ -99,6 +99,8 @@ def run_eval(vector_db_dir: str = "data/faiss_db_bge", use_simple: bool = False,
         use_bm25=False,    # 当前 venv 没装 jieba；评测只看 bge 路径
         use_reranker=True,
         reranker_model='BAAI/bge-reranker-v2-m3',  # 2026-09-20 启用（已预下载到 HF cache）
+        vector_top_k=5,    # 2026-09-20 减 rerank 输入数：10 → 5（latency 砍半，pass_rate 几乎不掉）
+        bm25_top_k=5,      # 同上
         use_hyde=use_hyde,
         hyde_llm=None,     # eval runner 不用 chat_manager 的 LLM，下面单独建一个
     )
