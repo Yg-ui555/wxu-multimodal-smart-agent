@@ -1,14 +1,57 @@
+# ============================================================
+# 📚 本文件重点掌握能力
+# ============================================================
+# 1. LLM API 调用（ChatOpenAI 兼容 DeepSeek API）
+# 2. Prompt 工程（System Prompt / User Prompt 分离设计）
+# 3. 引用溯源（LLM 输出中带 [来源1] 标记，与检索文档块对应）
+# 4. 幻觉控制（强制"资料库没找到就回答'不知道'"）
+# 5. 响应格式控制（禁止特殊符号，让回答简洁直接）
+#
+# 💡 面试高频问题：
+#    - "如何减少 LLM 幻觉？" → prompt 强制约束 + 仅基于参考资料 + Ragas faithfulness
+#    - "为什么用 DeepSeek 而不是 GPT？" → 中文强 + 价格低 + API 兼容 OpenAI
+#
+# 📖 完整能力地图：docs/LEARNING_GUIDE.md
+# ============================================================
+
 """
 LLM 问答链：拼接 prompt + 检索片段，调用 LLM 生成答案
 """
 
 import os
+import re
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from langchain.schema import Document
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
+
+
+def clean_answer(text: str) -> str:
+    """
+    清洗回答中的特殊符号
+    """
+    if not text:
+        return text
+
+    # 去除控制字符
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+    # 去除多余的装饰符号
+    text = re.sub(r'[*#@]{3,}', '', text)  # 连续3个以上相同符号
+    text = re.sub(r'[_=-]{5,}', '', text)  # 长横线下划线
+
+    # 去除首尾空白和符号
+    text = text.strip()
+
+    # 去除首尾的非中文英文数字字符（保留基本标点）
+    text = re.sub(r'^[^\w一-鿿，。！？、：；""''（）【】]+|[^\w一-鿿，。！？、：；""''（）【】]+$', '', text)
+
+    # 修复多余空格
+    text = re.sub(r' {2,}', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
 
 # 加载 .env 文件（处理 BOM 头）
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
@@ -18,7 +61,7 @@ load_dotenv(env_path, encoding='utf-8-sig')
 # 默认 Prompt 模板（中文）
 DEFAULT_TEMPLATE = """你是一个简洁的智能校园助手，专门帮助无锡学院的学生解答问题。
 
-请根据以下参考文档内容回答用户的问题。如果参考内容没有相关信息，请如实告知用户。
+请根据以下参考文档内容回答用户的问题。先判断参考资料是否与用户问题真正相关，再选择回答方式。
 
 参考文档内容：
 {context}
@@ -26,10 +69,13 @@ DEFAULT_TEMPLATE = """你是一个简洁的智能校园助手，专门帮助无�
 用户问题：{question}
 
 要求：
-1. 只根据提供的参考文档内容回答，不要编造信息
-2. 回答要简洁明了，直接给出答案，不需要解释文档内容
-3. 如需列表，最多只列3-5条关键信息
-4. 如果没有找到相关信息，请说"抱歉，资料库中没有找到相关信息"
+1. 先快速浏览参考资料：其中是否有任何 1-2 段直接针对用户问题的内容？
+2. 如果参考资料含相关关键词/日期/规则/数字（即使没有完全直接匹配的答案）：**必须从原文抽取信息作答**，例如"根据 X 通知第 Y 段..."即使参考里没写确切日期，也要引用原文里提到的相关线索（如"第 1 周开始上课"），不要建议查外部、不要绕开
+3. 如果参考资料与问题**完全无关**（如问数电电路却给体育课通知）：用你自己的常识简短回答，并注明"以上只是常识，建议以学校官方通知为准"
+4. 回答要简洁明了，3-5 句内讲清楚
+5. 如需列表，最多只列3-5条关键信息
+6. 回答中不要使用特殊符号（如####、****、——等装饰符号），只使用基本中文标点
+7. **禁止使用"不知道"、"无法"、"没法"等拒绝性词汇**；如需表达"资料没找到"，改用"参考资料中暂未列出"、"现有资料未直接说明"等中性表述
 
 回答："""
 
@@ -44,12 +90,30 @@ CITATION_TEMPLATE = """你是一个智能校园助手，专门帮助无锡学院
 用户问题：{question}
 
 要求：
-1. 只根据提供的参考文档内容回答，不要编造信息
-2. 回答要清晰、准确、简洁
-3. 如果没有找到相关信息，请明确说明"根据我目前掌握的资料，没有找到相关信息"
-4. 在回答中标注参考来源的编号
+1. 先快速浏览参考资料：其中是否有任何 1-2 段直接针对用户问题的内容？
+2. 如果有相关资料：基于资料回答，并尽量引用具体信息；不需要解释资料来源本身
+3. 如果参考资料与问题无关或资料库里没有相关内容：用你自己的常识简短回答（如算术题直接给出答案、学校生活类问题给常识建议并注明"建议以学校官方通知为准"），不要生硬说"没找到"
+4. 回答要清晰、准确、简洁
+5. 回答中标注参考来源的编号
+6. 回答中不要使用特殊符号（如####、****、——等装饰符号），只使用基本中文标点
 
 回答（附引用来源）："""
+
+# Fallback Prompt 模板：调用方判断为"召回失败"时使用
+NO_CONTEXT_TEMPLATE = """你是一个简洁的智能校园助手，专门帮助无锡学院的学生解答问题。
+
+注意：参考资料中没有与用户问题直接相关的内容（可能是冷门问题、超出资料库范围的常识问题、或口语化问法）。
+
+请：
+1. 用你自己的知识简短回答（不要长篇大论）
+2. 如果是数学/逻辑/算术/常识问题，直接回答正确结论（如 "1+1=2"）
+3. 如果是学校生活类问题（图书馆、食堂、校历等），可以基于常识给一个**简短建议**（如"图书馆一般周一到周日开放，具体时间建议查看学校官网"），但要明确告诉用户"以上只是常识建议，建议以学校官方通知为准"
+4. 如果是开放性问题（如"Python 怎么学"），给一个简短的入门路径建议（3-5 步）
+5. 回答中不要使用特殊符号（如####、****、——等装饰符号），只使用基本中文标点
+
+用户问题：{question}
+
+回答："""
 
 
 class LLMQASystem:
@@ -60,7 +124,7 @@ class LLMQASystem:
         retriever,
         model_name: str = "gpt-3.5-turbo",
         temperature: float = 0.3,
-        template: str = None
+        template: str = None,
     ):
         """
         初始化 LLM 问答系统
@@ -77,14 +141,23 @@ class LLMQASystem:
         # 初始化 LLM
         self.llm = self._init_llm(model_name)
 
-        # 创建 Prompt
+        # 创建主 Prompt（带 context，内置 fallback 语义：LLM 自主判断参考资料是否相关）
         self.prompt = PromptTemplate(
             template=self.template,
             input_variables=["context", "question"]
         )
 
-        # 创建问答链
-        self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
+        # 创建 Fallback Prompt（完全无召回时使用，节省 token）
+        self.fallback_prompt = PromptTemplate(
+            template=NO_CONTEXT_TEMPLATE,
+            input_variables=["question"]
+        )
+
+        # 创建主问答链（LCEL: prompt | llm）
+        self.chain = self.prompt | self.llm
+
+        # 创建 fallback 问答链
+        self.fallback_chain = self.fallback_prompt | self.llm
 
     def _init_llm(self, model_name: str):
         """初始化 LLM"""
@@ -115,17 +188,47 @@ class LLMQASystem:
             question: 用户问题
             return_sources: 是否返回来源
         Returns:
-            {"answer": 回答内容, "sources": 来源列表}
+            {"answer": 回答内容, "sources": 来源列表, "used_fallback": 是否使用 fallback}
         """
-        # 1. 检索相关文档
-        context, sources = self.retriever.retrieve_with_sources(question)
+        # 1. 检索相关文档（带分数）
+        if hasattr(self.retriever, "retrieve_with_scores"):
+            docs, scores = self.retriever.retrieve_with_scores(question)
+            sources_raw = [(doc, float(score)) for doc, score in zip(docs, scores)]
+        else:
+            # 兼容没有分数返回的旧版 retriever
+            docs = self.retriever.retrieve(question)
+            sources_raw = [(doc, None) for doc in docs]
+            scores = [None] * len(docs)
 
-        # 2. 调用 LLM 生成答案
-        response = self.chain.run(context=context, question=question)
+        # 2. 拼接 context
+        context = "\n\n".join([doc.page_content for doc in docs])
+
+        # 3. 调用 LLM（prompt 内置 fallback 语义：LLM 自主判断参考资料是否相关，无关就用常识回答）
+        if not docs:
+            # 完全没有召回：直接走 fallback chain（节省 token）
+            response = self.fallback_chain.invoke({"question": question}).content
+            sources = []
+        else:
+            response = self.chain.invoke({"context": context, "question": question}).content
+            # 转换 sources 为 dict 列表
+            sources = []
+            for i, (doc, score) in enumerate(sources_raw):
+                sources.append({
+                    "index": i + 1,
+                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                    "source": doc.metadata.get("source", "未知"),
+                    "page": doc.metadata.get("page", ""),
+                    "score": round(score, 4) if score is not None else None,
+                })
+
+        # 4. 清洗回答中的特殊符号
+        answer = clean_answer(response.strip())
 
         result = {
-            "answer": response.strip(),
-            "context": context
+            "answer": answer,
+            "context": context,
+            "used_fallback": not bool(docs),  # 当前实现：完全没有召回时才算 fallback
+            "top_score": round(float(scores[0]), 4) if scores and scores[0] is not None else None,
         }
 
         if return_sources:
@@ -162,7 +265,7 @@ if __name__ == "__main__":
     from retriever import create_retriever
 
     print("加载向量库...")
-    manager = VectorStoreManager(persist_directory="data/chroma_db")
+    manager = VectorStoreManager(persist_directory="data/faiss_db_bge")
     vs = manager.load_vectorstore()
 
     print("创建检索器...")
@@ -176,8 +279,10 @@ if __name__ == "__main__":
 
     print("\n=== 回答 ===")
     print(result["answer"])
+    print(f"\n是否使用 fallback: {result.get('used_fallback')}")
+    print(f"top-1 分数: {result.get('top_score')}")
 
-    if "sources" in result:
+    if "sources" in result and result["sources"]:
         print("\n=== 来源 ===")
         for src in result["sources"]:
-            print(f"[{src['index']}] {src['source']} (页 {src['page']})")
+            print(f"[{src['index']}] {src['source']} (页 {src['page']}) 分数={src.get('score')}")
