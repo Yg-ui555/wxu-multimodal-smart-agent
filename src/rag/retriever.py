@@ -430,6 +430,10 @@ def create_retriever(
     # 修复(2026-09-20): create_retriever 之前忘记透传 reranker_model,
     # 导致外部传 reranker_model=... 报 TypeError。
     reranker_model: Optional[str] = None,
+    # 2026-09-20 缓解 latency：暴露 vector_top_k / bm25_top_k 给调用方，
+    # 默认保持原值 10（兼容旧调用），但生产路径传 5 让 rerank 输入砍半。
+    vector_top_k: int = 10,
+    bm25_top_k: int = 10,
     use_hyde: bool = False,           # 2026-09-17 加：HyDE 召回增强
     hyde_llm = None,                  # 2026-09-17 加：HyDE 要用的 LLM
 ) -> HybridRetriever:
@@ -443,6 +447,8 @@ def create_retriever(
         use_bm25: 是否启用 BM25
         use_reranker: 是否启用 reranker
         reranker_model: reranker 模型 ID（如 'BAAI/bge-reranker-v2-m3'），None=跳过
+        vector_top_k: 向量路召回数量（rerank 前的候选数）
+        bm25_top_k: BM25 路召回数量（rerank 前的候选数）
         use_hyde: 是否启用 HyDE
         hyde_llm: HyDE 用的 LLM（ChatModel）
     Returns:
@@ -456,6 +462,8 @@ def create_retriever(
         use_bm25=use_bm25,
         use_reranker=use_reranker,
         reranker_model=reranker_model,
+        vector_top_k=vector_top_k,
+        bm25_top_k=bm25_top_k,
         use_hyde=use_hyde,
         hyde_llm=hyde_llm,
     )
