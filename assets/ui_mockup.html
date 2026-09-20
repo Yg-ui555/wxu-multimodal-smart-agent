@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>无锡学院智能助手 · 高保真原型</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --primary: #003F88;
+    --primary-light: #E8F0FA;
+    --primary-soft: #F4F8FD;
+    --accent: #D4AF37;
+    --accent-light: #FDF6E3;
+    --bg: #FAFBFC;
+    --card: #FFFFFF;
+    --border: #E5E7EB;
+    --border-soft: #F0F2F5;
+    --text: #14171E;
+    --text-2: #3A4256;
+    --muted: #7C7A72;
+    --success: #10B981;
+    --success-light: #E6F7F0;
+    --warning: #F59E0B;
+    --warning-light: #FEF6E7;
+    --danger: #EF4444;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 16px -2px rgba(0,0,0,0.06);
+    --shadow-lg: 0 8px 32px -4px rgba(0,63,136,0.08);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { font-family: 'Outfit', -apple-system, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.55; }
+  body { height: 100vh; overflow: hidden; }
+
+  /* ====== Top Header ====== */
+  .topbar {
+    height: 56px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 16px;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; color: var(--primary);
+  }
+  .logo-icon {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--primary), #1E5BB8);
+    display: flex; align-items: center; justify-content: center; color: white;
+  }
+  .breadcrumb {
+    color: var(--muted); font-size: 13px; padding-left: 12px; border-left: 1px solid var(--border);
+  }
+  .breadcrumb b { color: var(--text); font-weight: 500; }
+
+  .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+
+  .credit-ring {
+    display: flex; align-items: center; gap: 10px; padding: 6px 14px;
+    background: var(--primary-soft); border-radius: 999px; cursor: pointer;
+    transition: background .15s;
+  }
+  .credit-ring:hover { background: var(--primary-light); }
+  .credit-ring svg { color: var(--primary); }
+  .credit-ring-text { font-size: 12px; color: var(--text-2); }
+  .credit-ring-text b { color: var(--primary); font-weight: 600; }
+
+  .bell {
+    width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); cursor: pointer; position: relative; color: var(--text-2);
+  }
+  .bell:hover { background: var(--border-soft); }
+  .bell-dot {
+    position: absolute; top: 8px; right: 9px; width: 8px; height: 8px;
+    background: var(--danger); border-radius: 50%; border: 2px solid var(--card);
+  }
+
+  .user-chip {
+    display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 4px;
+    background: var(--bg); border-radius: 999px; cursor: pointer;
+  }
+  .user-chip:hover { background: var(--border-soft); }
+  .user-avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), #F5C961); color: white;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600;
+  }
+  .user-chip span { font-size: 13px; color: var(--text); }
+
+  /* ====== Layout ====== */
+  .layout { display: grid; grid-template-columns: 240px 1fr 340px; height: calc(100vh - 56px); }
+
+  /* ====== Sidebar ====== */
+  .sidebar { background: var(--card); border-right: 1px solid var(--border); padding: 16px 12px; }
+  .nav-section { margin-bottom: 20px; }
+  .nav-label {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    letter-spacing: 0.06em; text-transform: uppercase; padding: 0 12px 8px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin-bottom: 2px;
+    border-radius: 8px; cursor: pointer; color: var(--text-2); font-size: 13.5px; font-weight: 500;
+    transition: all .15s;
+  }
+  .nav-item:hover { background: var(--bg); color: var(--text); }
+  .nav-item.active { background: var(--primary); color: white; }
+  .nav-item.active:hover { background: var(--primary); }
+  .nav-item svg { flex-shrink: 0; }
+  .nav-badge {
+    margin-left: auto; padding: 2px 8px; border-radius: 999px;
+    background: var(--accent); color: var(--primary); font-size: 11px; font-weight: 700;
+  }
+  .nav-item.active .nav-badge { background: white; color: var(--primary); }
+
+  .history-section { flex: 1; overflow-y: auto; }
+  .history-item {
+    padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    color: var(--text-2); margin-bottom: 2px; line-height: 1.4;
+    transition: all .15s;
+  }
+  .history-item:hover { background: var(--bg); color: var(--text); }
+  .history-item .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ====== Main Chat Area ====== */
+  .main { display: flex; flex-direction: column; background: var(--bg); position: relative; }
+  .chat-area { flex: 1; overflow-y: auto; padding: 24px 32px 16px; }
+  .chat-container { max-width: 820px; margin: 0 auto; }
+
+  /* Welcome banner */
+  .welcome {
+    text-align: center; padding: 32px 0 24px;
+  }
+  .welcome h1 {
+    font-size: 24px; font-weight: 600; color: var(--text); margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+  .welcome h1 b { color: var(--primary); font-weight: 700; }
+  .welcome p { color: var(--muted); font-size: 13px; }
+
+  /* Chat bubbles */
+  .msg { display: flex; gap: 12px; margin-bottom: 18px; animation: fadeUp .4s ease; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .msg-user { flex-direction: row-reverse; }
+  .msg-avatar {
+    width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600;
+  }
+  .msg-user .msg-avatar { background: linear-gradient(135deg, var(--accent), #F5C961); color: white; }
+  .msg-bot .msg-avatar { background: linear-gradient(135deg, var(--primary), #1E5BB8); color: white; }
+  .msg-body { max-width: 78%; }
+  .msg-name { font-size: 12px; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
+  .msg-user .msg-name { text-align: right; }
+  .msg-text {
+    padding: 12px 16px; border-radius: 14px; font-size: 14px; line-height: 1.6;
+    background: var(--card); border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-sm);
+  }
+  .msg-user .msg-text {
+    background: var(--primary); color: white; border-color: transparent;
+    border-bottom-right-radius: 4px;
+  }
+  .msg-bot .msg-text { border-bottom-left-radius: 4px; }
+
+  /* Thinking chain */
+  .thinking-chain {
+    margin-top: 12px; padding: 12px; background: var(--card);
+    border: 1px solid var(--border-soft); border-radius: 12px;
+  }
+  .thinking-title {
+    display: flex; align-items: center; gap: 8px; font-size: 12px;
+    color: var(--primary); font-weight: 600; margin-bottom: 10px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .thinking-title .pulse {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--primary);
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  .step {
+    display: flex; gap: 10px; padding: 8px 0;
+    border-bottom: 1px dashed var(--border-soft);
+  }
+  .step:last-child { border-bottom: 0; }
+  .step-num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--primary-soft); color: var(--primary);
+    font-size: 11px; font-weight: 700; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 1px;
+  }
+  .step-num.done { background: var(--success-light); color: var(--success); }
+  .step-content { flex: 1; }
+  .step-name { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  .step-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .step-tool {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 7px; border-radius: 4px;
+    background: var(--accent-light); color: #8B6F1F;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500;
+    margin-left: 4px;
+  }
+  .step-time { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; margin-top: 1px; }
+
+  /* Source citations */
+  .sources {
+    margin-top: 10px; padding: 10px 12px; background: var(--primary-soft);
+    border-radius: 8px; font-size: 12px;
+  }
+  .sources-title { color: var(--primary); font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+  .source-chip {
+    display: inline-block; padding: 3px 10px; margin: 2px 4px 2px 0;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text-2); font-size: 11px;
+  }
+  .source-chip b { color: var(--primary); margin-right: 4px; }
+
+  /* Final answer card */
+  .answer-card {
+    margin-top: 10px; padding: 16px; background: linear-gradient(135deg, var(--primary-soft), #fff);
+    border: 1px solid var(--border); border-radius: 12px;
+  }
+  .answer-title {
+    display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600;
+    color: var(--primary); margin-bottom: 12px;
+  }
+  .course-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .course-card {
+    padding: 12px; background: var(--card); border: 1px solid var(--border-soft);
+    border-radius: 8px; transition: all .15s;
+  }
+  .course-card:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+  .course-name { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .course-meta {
+    display: flex; gap: 8px; font-size: 11px; color: var(--muted); margin-bottom: 8px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .course-meta span { display: flex; align-items: center; gap: 3px; }
+  .course-credit {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    background: var(--accent-light); color: #8B6F1F;
+    font-size: 11px; font-weight: 600;
+  }
+  .course-reason { font-size: 12px; color: var(--text-2); margin-top: 8px; line-height: 1.5; }
+  .course-reason b { color: var(--primary); }
+
+  /* Action chips */
+  .action-chips { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .chip {
+    padding: 6px 12px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 999px; font-size: 12px; color: var(--text-2);
+    cursor: pointer; transition: all .15s;
+  }
+  .chip:hover { background: var(--primary); color: white; border-color: var(--primary); }
+
+  /* ====== Input Bar ====== */
+  .input-bar {
+    padding: 12px 32px 20px;
+    background: linear-gradient(to top, var(--bg) 70%, transparent);
+  }
+  .input-wrap { max-width: 820px; margin: 0 auto; position: relative; }
+  .input-box {
+    display: flex; align-items: flex-end; gap: 6px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 8px 8px 8px 14px; box-shadow: var(--shadow-md);
+    transition: border-color .15s;
+  }
+  .input-box:focus-within { border-color: var(--primary); }
+  .input-actions { display: flex; gap: 4px; padding-bottom: 6px; }
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: 8px; background: transparent; border: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); cursor: pointer; transition: all .15s;
+  }
+  .icon-btn:hover { background: var(--bg); color: var(--text); }
+  .input-text {
+    flex: 1; border: 0; outline: 0; resize: none; background: transparent;
+    font-family: inherit; font-size: 14px; color: var(--text);
+    padding: 8px 4px; line-height: 1.5; min-height: 36px;
+  }
+  .input-text::placeholder { color: var(--muted); }
+  .send-btn {
+    width: 36px; height: 36px; border-radius: 8px; border: 0;
+    background: var(--primary); color: white; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .15s;
+  }
+  .send-btn:hover { background: #002F6B; transform: scale(1.05); }
+  .input-hint {
+    text-align: center; font-size: 11px; color: var(--muted); margin-top: 8px;
+  }
+  .input-hint kbd {
+    padding: 1px 5px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 3px; font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  }
+
+  /* ====== Right Panel ====== */
+  .right-panel { background: var(--card); border-left: 1px solid var(--border); padding: 16px; overflow-y: auto; }
+  .rp-section { margin-bottom: 20px; }
+  .rp-title {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 10px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .rp-title-link { font-size: 11px; color: var(--primary); cursor: pointer; font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+  /* Credit progress */
+  .credit-card {
+    padding: 14px; background: linear-gradient(135deg, var(--primary), #1E5BB8);
+    border-radius: 12px; color: white; position: relative; overflow: hidden;
+  }
+  .credit-card::before {
+    content: ''; position: absolute; top: -20px; right: -20px; width: 100px; height: 100px;
+    background: radial-gradient(circle, rgba(212,175,55,.3), transparent 70%);
+  }
+  .credit-card-title { font-size: 11px; opacity: .8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .credit-card-value { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+  .credit-card-value small { font-size: 14px; opacity: .7; font-weight: 500; }
+  .credit-progress-bar {
+    margin-top: 10px; height: 6px; background: rgba(255,255,255,.2); border-radius: 999px; overflow: hidden;
+  }
+  .credit-progress-fill { height: 100%; background: var(--accent); border-radius: 999px; }
+  .credit-card-foot { font-size: 11px; opacity: .85; margin-top: 6px; display: flex; justify-content: space-between; }
+
+  /* Achievement */
+  .achievement-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .ach {
+    aspect-ratio: 1; border-radius: 10px;
+    background: var(--bg); display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-soft); position: relative; cursor: pointer;
+    transition: all .15s;
+  }
+  .ach:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+  .ach.unlocked { background: var(--accent-light); border-color: var(--accent); }
+  .ach svg { width: 22px; height: 22px; }
+  .ach.unlocked svg { color: var(--accent); }
+  .ach.locked svg { color: var(--muted); opacity: .5; }
+
+  /* Daily tip */
+  .tip-card {
+    padding: 12px; background: var(--warning-light); border-radius: 10px;
+    border-left: 3px solid var(--warning);
+  }
+  .tip-label {
+    display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600;
+    color: #8B5A0B; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;
+  }
+  .tip-text { font-size: 13px; color: var(--text); line-height: 1.55; }
+  .tip-text b { color: #8B5A0B; }
+
+  /* Notification */
+  .notif { padding: 10px; border-radius: 8px; cursor: pointer; margin-bottom: 6px; transition: background .15s; }
+  .notif:hover { background: var(--bg); }
+  .notif-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; }
+  .notif-tag {
+    display: inline-block; padding: 1px 7px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+  }
+  .notif-tag.policy { background: var(--success-light); color: #047857; }
+  .notif-tag.event { background: var(--primary-soft); color: var(--primary); }
+  .notif-tag.urgent { background: #FEE2E2; color: #B91C1C; }
+  .notif-time { font-size: 10px; color: var(--muted); }
+  .notif-title { font-size: 13px; font-weight: 500; color: var(--text); }
+
+  /* Subscription status */
+  .sub-card {
+    padding: 10px 12px; background: var(--card); border: 1px solid var(--border-soft);
+    border-radius: 8px; display: flex; align-items: center; gap: 10px;
+  }
+  .sub-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--primary-soft); display: flex; align-items: center; justify-content: center; color: var(--primary); }
+  .sub-info { flex: 1; }
+  .sub-name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .sub-meta { font-size: 10px; color: var(--muted); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- ============ TOP BAR ============ -->
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 10v6M2 10l10-5 10 5-10 5z"/>
+        <path d="M6 12v5c3 3 9 3 12 0v-5"/>
+      </svg>
+    </div>
+    <span>锡院智能助手</span>
+  </div>
+  <div class="breadcrumb">
+    <span>智能问答 / </span><b>选课规划</b>
+  </div>
+  <div class="topbar-actions">
+    <div class="credit-ring" title="已修学分 102 / 160">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="8" r="6"/>
+        <path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/>
+      </svg>
+      <div class="credit-ring-text"><b>102</b> / 160 学分</div>
+    </div>
+    <div class="bell">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+        <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+      </svg>
+      <div class="bell-dot"></div>
+    </div>
+    <div class="user-chip">
+      <div class="user-avatar">马</div>
+      <span>马欣宇</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ LAYOUT ============ -->
+<div class="layout">
+
+  <!-- ===== Sidebar ===== -->
+  <aside class="sidebar">
+    <div class="nav-section">
+      <div class="nav-label">主要功能</div>
+      <div class="nav-item active">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>智能问答</span>
+      </div>
+      <div class="nav-item">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+        <span>拍照识建筑</span>
+      </div>
+      <div class="nav-item">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        <span>学分规划</span>
+        <span class="nav-badge">58 待修</span>
+      </div>
+      <div class="nav-item">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        <span>通知订阅</span>
+        <span class="nav-badge">3</span>
+      </div>
+      <div class="nav-item">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+        <span>学习中心</span>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">最近对话</div>
+      <div class="history-item">
+        转专业需要什么条件？
+        <div class="meta">昨天 21:30</div>
+      </div>
+      <div class="history-item">
+        奖学金评定流程是怎么样的？
+        <div class="meta">昨天 15:42</div>
+      </div>
+      <div class="history-item">
+        图书馆周末开放吗？
+        <div class="meta">前天 09:18</div>
+      </div>
+      <div class="history-item">
+        校历第8周周一上不上课？
+        <div class="meta">3 天前</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===== Main ===== -->
+  <main class="main">
+    <div class="chat-area">
+      <div class="chat-container">
+
+        <div class="welcome">
+          <h1>选课规划助手 · <b>智能体模式</b></h1>
+          <p>智能体将自主调用 RAG · 学分计算 · 课表爬虫 工具，给你综合建议</p>
+        </div>
+
+        <!-- User message -->
+        <div class="msg msg-user">
+          <div class="msg-avatar">马</div>
+          <div class="msg-body">
+            <div class="msg-name">马欣宇 · 大三 · 电信院</div>
+            <div class="msg-text">我下学期（大三下）应该选什么课？我目前修了 102 学分，目标 160，还差 58 学分。我的方向是嵌入式系统。</div>
+          </div>
+        </div>
+
+        <!-- Bot thinking + answer -->
+        <div class="msg msg-bot">
+          <div class="msg-avatar">AI</div>
+          <div class="msg-body">
+            <div class="msg-name">锡院智能助手 · 已调用 3 个工具</div>
+
+            <!-- Thinking chain -->
+            <div class="thinking-chain">
+              <div class="thinking-title">
+                <span class="pulse"></span>
+                智能体推理过程 · Chain-of-Thought
+              </div>
+
+              <div class="step">
+                <div class="step-num done">1</div>
+                <div class="step-content">
+                  <div class="step-name">理解意图</div>
+                  <div class="step-desc">检测到选课规划请求，涉及：培养方案约束 + 学分缺口计算 + 个性化方向推荐</div>
+                </div>
+                <div class="step-time">0.2s</div>
+              </div>
+
+              <div class="step">
+                <div class="step-num done">2</div>
+                <div class="step-content">
+                  <div class="step-name">调用 RAG 检索 <span class="step-tool">query_rag</span></div>
+                  <div class="step-desc">从 12,334 个文档块中召回培养方案、本学期开课目录、嵌入式方向选修课</div>
+                </div>
+                <div class="step-time">1.4s</div>
+              </div>
+
+              <div class="step">
+                <div class="step-num done">3</div>
+                <div class="step-content">
+                  <div class="step-name">调用 学分计算器 <span class="step-tool">calc_credit</span></div>
+                  <div class="step-desc">剩余 58 学分中：必修 30、限选 18、自由 10。嵌入式方向需选 ≥6 学分方向课</div>
+                </div>
+                <div class="step-time">0.3s</div>
+              </div>
+
+              <div class="step">
+                <div class="step-num done">4</div>
+                <div class="step-content">
+                  <div class="step-name">调用 课表爬虫 <span class="step-tool">crawl_schedule</span></div>
+                  <div class="step-desc">抓取教务处 2025-2026(2) 开课通知，已过滤与嵌入式方向匹配的 4 门</div>
+                </div>
+                <div class="step-time">2.1s</div>
+              </div>
+
+              <div class="step">
+                <div class="step-num done">5</div>
+                <div class="step-content">
+                  <div class="step-name">综合推理 + 生成回答</div>
+                  <div class="step-desc">结合学分缺口、培养方案约束、方向偏好、往年评价，给出 3 门推荐课</div>
+                </div>
+                <div class="step-time">1.8s</div>
+              </div>
+            </div>
+
+            <!-- Source citations -->
+            <div class="sources">
+              <div class="sources-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                引用来源 · 4 篇文档
+              </div>
+              <div class="source-chip"><b>[1]</b> 电子信息工程培养方案 2023 版</div>
+              <div class="source-chip"><b>[2]</b> 2025-2026(2) 学期开课通知</div>
+              <div class="source-chip"><b>[3]</b> 嵌入式系统方向限选课清单</div>
+              <div class="source-chip"><b>[4]</b> 学生评教: 嵌入式课程</div>
+            </div>
+
+            <!-- Final answer -->
+            <div class="answer-card">
+              <div class="answer-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                推荐你下学期选修这 3 门
+              </div>
+              <div class="course-grid">
+                <div class="course-card">
+                  <div class="course-name">嵌入式 Linux 系统</div>
+                  <div class="course-meta">
+                    <span>📖 限选</span><span>3 学分</span><span>周二34节</span>
+                  </div>
+                  <span class="course-credit">+ 3 学分</span>
+                  <div class="course-reason">学长评教 <b>4.8/5</b>，与你 ARM 课程衔接，就业方向对口</div>
+                </div>
+                <div class="course-card">
+                  <div class="course-name">FPGA 设计与应用</div>
+                  <div class="course-meta">
+                    <span>📖 限选</span><span>3 学分</span><span>周四12节</span>
+                  </div>
+                  <span class="course-credit">+ 3 学分</span>
+                  <div class="course-reason">数字电路后续，<b>竞赛加分项</b>，历年多人进电赛省赛</div>
+                </div>
+                <div class="course-card">
+                  <div class="course-name">机器学习导论</div>
+                  <div class="course-meta">
+                    <span>📖 自由</span><span>2 学分</span><span>周五34节</span>
+                  </div>
+                  <span class="course-credit">+ 2 学分</span>
+                  <div class="course-reason">跨方向选修，<b>AI Agent 方向</b>入门，为毕设打基础</div>
+                </div>
+              </div>
+
+              <div class="action-chips">
+                <div class="chip">📅 加入我的课表</div>
+                <div class="chip">📊 查看完整学分报告</div>
+                <div class="chip">🔄 换一组推荐</div>
+                <div class="chip">💬 详细讲解这门课</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Input bar -->
+    <div class="input-bar">
+      <div class="input-wrap">
+        <div class="input-box">
+          <div class="input-actions">
+            <button class="icon-btn" title="上传文档">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <button class="icon-btn" title="拍照">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+            </button>
+            <button class="icon-btn" title="语音">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </button>
+          </div>
+          <textarea class="input-text" placeholder="问问智能体：选课 / 学分 / 政策 / 拍照识建筑 ..." rows="1"></textarea>
+          <button class="send-btn" title="发送">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+        <div class="input-hint">
+          按 <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 智能体可自主调用工具
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ===== Right Panel ===== -->
+  <aside class="right-panel">
+    <!-- Credit -->
+    <div class="rp-section">
+      <div class="rp-title">学分进度</div>
+      <div class="credit-card">
+        <div class="credit-card-title">当前已修</div>
+        <div class="credit-card-value">102<small>/160</small></div>
+        <div class="credit-progress-bar"><div class="credit-progress-fill" style="width: 63.75%"></div></div>
+        <div class="credit-card-foot">
+          <span>还需 58 学分</span>
+          <span>· 大三下修完</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Achievements -->
+    <div class="rp-section">
+      <div class="rp-title">
+        <span>学习徽章</span>
+        <span class="rp-title-link">查看全部 →</span>
+      </div>
+      <div class="achievement-grid">
+        <div class="ach unlocked" title="解锁: 问答 50 题">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+        </div>
+        <div class="ach unlocked" title="解锁: 学习7日打卡">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        </div>
+        <div class="ach unlocked" title="解锁: 拍照识图">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+        </div>
+        <div class="ach unlocked" title="解锁: 学霸认证">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </div>
+        <div class="ach locked" title="未解锁: 政策达人">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+        </div>
+        <div class="ach locked" title="未解锁: 课表高手">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        </div>
+        <div class="ach locked" title="未解锁: 订阅先锋">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="m22 6-10 7L2 6"/></svg>
+        </div>
+        <div class="ach locked" title="未解锁: 全部完成">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Daily tip -->
+    <div class="rp-section">
+      <div class="rp-title">今日锡院冷知识</div>
+      <div class="tip-card">
+        <div class="tip-label">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          你可能不知道
+        </div>
+        <div class="tip-text">
+          学校图书馆三楼 <b>电子阅览区</b> 周五延长开放到 <b>22:30</b>，期末周通宵开放，但需要提前一天在公众号预约哦。
+        </div>
+      </div>
+    </div>
+
+    <!-- Notifications -->
+    <div class="rp-section">
+      <div class="rp-title">
+        <span>校园通知</span>
+        <span class="rp-title-link">订阅 →</span>
+      </div>
+      <div class="notif">
+        <div class="notif-head">
+          <span class="notif-tag policy">政策</span>
+          <span class="notif-time">2 小时前</span>
+        </div>
+        <div class="notif-title">2026 年转专业工作启动通知</div>
+      </div>
+      <div class="notif">
+        <div class="notif-head">
+          <span class="notif-tag event">活动</span>
+          <span class="notif-time">昨天</span>
+        </div>
+        <div class="notif-title">江苏省电赛校内选拔赛报名</div>
+      </div>
+      <div class="notif">
+        <div class="notif-head">
+          <span class="notif-tag urgent">紧急</span>
+          <span class="notif-time">2 天前</span>
+        </div>
+        <div class="notif-title">下周一停课通知（运动会）</div>
+      </div>
+    </div>
+
+    <!-- Subscription -->
+    <div class="rp-section">
+      <div class="rp-title">订阅状态</div>
+      <div class="sub-card">
+        <div class="sub-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="m22 6-10 7L2 6"/></svg>
+        </div>
+        <div class="sub-info">
+          <div class="sub-name">3 个关键词订阅中</div>
+          <div class="sub-meta">奖学金 · 转专业 · 竞赛</div>
+        </div>
+      </div>
+    </div>
+
+  </aside>
+</div>
+
+</body>
+</html>
