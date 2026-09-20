@@ -367,6 +367,8 @@ class RAGApp:
             use_bm25=True,
             use_reranker=True,
             reranker_model='BAAI/bge-reranker-v2-m3',  # 2026-09-20 启用（首次启动会下载 ~2.27 GB）
+            vector_top_k=5,  # 2026-09-20 减 rerank 输入数：10 → 5（latency 砍半，pass_rate 几乎不掉）
+            bm25_top_k=5,    # 同上
             use_hyde=False,  # 2026-09-18：先关闭，等 qa_system 建好再开启
             hyde_llm=None,
         )
@@ -794,16 +796,6 @@ _CUSTOM_CSS = """
     font-size: 16px; font-weight: 700; color: #1f1d2c;
     margin-bottom: 16px;
 }
-.wxu-credit-progress {
-    height: 8px; background: rgba(255,255,255,0.6);
-    border-radius: 999px; overflow: hidden;
-    margin: 8px 0 14px;
-}
-.wxu-credit-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #8b5cf6, #ec4899);
-    border-radius: 999px; width: 68%;
-}
 .wxu-scenario-btn button {
     background: white !important;
     border: 1px solid #efe9f5 !important;
@@ -966,24 +958,6 @@ def build_gradio_interface(app: RAGApp) -> gr.Blocks:
                         scale=1,
                     )
                 gr.HTML(_build_exam_html())
-
-                # 我的学期
-                gr.HTML("""
-                <div class="wxu-personal-card">
-                    <div class="wxu-personal-title">🎯 我的学期</div>
-                    <div style="display:flex; align-items:center; justify-content:space-between;">
-                        <span style="font-size:13px; color:#6b6580;">已修学分</span>
-                        <span style="font-size:22px; font-weight:700; color:#1f1d2c;">89 <span style="color:#6b6580; font-size:14px; font-weight:500;">/ 130</span></span>
-                    </div>
-                    <div class="wxu-credit-progress">
-                        <div class="wxu-credit-fill"></div>
-                    </div>
-                    <div style="display:flex; align-items:center; justify-content:space-between; font-size:12.5px;">
-                        <span style="background:rgba(16,185,129,0.15); color:#047857; padding:4px 10px; border-radius:999px;">✅ 进度正常,本学期 22 学分</span>
-                        <span style="color:#6b6580;">还差 41 学分</span>
-                    </div>
-                </div>
-                """)
 
                 # 社团天地
                 gr.HTML('<div class="wxu-section-title">🎭 社团天地 · 找你的组织</div>')
