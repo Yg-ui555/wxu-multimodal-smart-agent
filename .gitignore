@@ -1,30 +1,44 @@
-# Python
+# Python 缓存
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# 虚拟环境
 venv/
+venv311/
+venv_old/
 .venv/
 
 # 密钥
 .env
 
-# 向量库、数据库
-data/chroma_db/
-data/faiss_db/
-data/sqlite/
+# 数据（向量库、文档、用户历史）—— 体积大且含校内资料
+data/
 
-# 数据集大图（不上传图片到github）
-data/images/
-
-# 日志、临时文件
+# 日志
+logs/
 *.log
 *.tmp
 
-# 文档（知识库）
-data/docs/
+# 备份文件
+*.bak
+*.bak.*
+
+# 临时清理目录
+scripts/cleanup_*/
+
+# 评估运行产物（保留测试集 eval_set.json 和 bad_case 报告）
+tests/eval_current*.json
+tests/eval_baseline.json
+tests/eval_current_with_hyde.json
+tests/*.html
 
 # IDE
 .idea/
 .vscode/
 *.iml
+
+# 操作系统
+.DS_Store
+Thumbs.db
