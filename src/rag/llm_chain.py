@@ -211,7 +211,8 @@ class LLMQASystem:
         # 1. 检索相关文档（带分数）
         if hasattr(self.retriever, "retrieve_with_scores"):
             docs, scores = self.retriever.retrieve_with_scores(question)
-            sources_raw = [(doc, float(score)) for doc, score in zip(docs, scores)]
+            # BGE reranker 偶发 None 分数,这里防御性转换,None 视为 0.0(不影响 docs 长度对齐)
+            sources_raw = [(doc, float(score) if score is not None else 0.0) for doc, score in zip(docs, scores)]
         else:
             # 兼容没有分数返回的旧版 retriever
             docs = self.retriever.retrieve(question)
