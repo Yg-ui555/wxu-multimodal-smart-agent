@@ -39,6 +39,72 @@ except ImportError:
 
 
 # ============================================================
+# 合规过滤（2026-09-21）
+# 依据《无锡学院关于试卷印制、保管和保存的实施办法（试行）》：
+# 试卷（含空白卷、参考答案）属于教学档案，由学院统一归档保存，
+# 保密管理，不得向学生披露。
+# 知识库可保留这些文档供内部参考，但检索结果不得返回给用户。
+# ============================================================
+_EXAM_DOC_PATTERNS = [
+    r"试卷",           # 期末试卷 / 单片机试卷 / 期中试卷
+    r"真题",           # 历年真题 / 期末真题
+    r"参考答案",        # 参考答案 / 含参考答案
+    r"答案\.",         # 答案.pdf / 答案.docx / 答案.doc
+    r"答案\.(pdf|docx?|doc)$",   # 文件名以"答案.pdf/docx/doc"结尾
+    r"空白卷",
+    r"模拟卷",
+    r"考卷",
+    r"考题",
+    r"[（(]?[AaＢbBb][）)]?卷",   # A卷 / B卷 / (A)卷 / （A）卷
+    # 单字母结尾的试卷题干（如"信号与系统A.pdf"、"复变函数B.docx"）
+    r"[A-Za-z]\.(pdf|docx?)$",
+    r"[A-Za-z]卷\.(pdf|docx?)$",  # A卷.pdf / B卷.docx
+]
+
+# 白名单：含"考"字但实际是元信息文档（合规可检索）
+_EXAM_DOC_WHITELIST = [
+    r"教学日历",
+    r"考试安排",
+    r"考试时间",
+    r"考试周",
+    r"课程大纲",
+    r"教学大纲",
+]
+
+
+def _is_exam_doc(doc) -> bool:
+    """判断 doc 是否属于"试卷/答案/往年真题"类（合规要过滤的文档）
+
+    检查来源字段（source / file_path / file_name），
+    任一含敏感词且不在白名单即判定为试卷类。
+
+    Returns:
+        True = 试卷类（应过滤），False = 普通文档（保留）
+
+    修复记录：
+        2026-09-21 新增。期末周合规要求：用户问问题时不得返回试卷原题/答案。
+    """
+    md = doc.metadata or {}
+    candidates = [
+        str(md.get("source", "")),
+        str(md.get("file_path", "")),
+        str(md.get("file_name", "")),
+    ]
+    text = "\n".join(candidates)
+
+    # 白名单优先（合规模板）
+    for wl in _EXAM_DOC_WHITELIST:
+        if re.search(wl, text):
+            return False
+
+    # 黑名单匹配
+    for pattern in _EXAM_DOC_PATTERNS:
+        if re.search(pattern, text):
+            return True
+    return False
+
+
+# ============================================================
 # BM25 关键词索引
 # ============================================================
 
@@ -324,6 +390,17 @@ class HybridRetriever:
             fused = self.reranker.rerank(query, fused, top_n=self.top_k)
         else:
             fused = fused[:self.top_k]
+
+        # 4. (2026-09-21 合规) 过滤试卷/答案类文档
+        # 依据《无锡学院关于试卷印制、保管和保存的实施办法（试行）》：
+        # 试卷（含空白卷、参考答案）属教学档案保密材料，
+        # 不得向学生披露。检索阶段直接剔除，避免泄漏给 LLM。
+        if fused:
+            before_n = len(fused)
+            fused = [d for d in fused if not _is_exam_doc(d)]
+            filtered_n = before_n - len(fused)
+            if filtered_n > 0:
+                log.debug(f"合规过滤：剔除 {filtered_n} 篇试卷类文档（期末周合规要求）")
 
         return fused
 
