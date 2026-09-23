@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}无锡学院智能助手{% endblock %}</title>
+  <link rel="stylesheet" href="/static/nav.css">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <nav class="wxu-nav">
+    <a href="/" class="wxu-nav-logo">
+      <span class="wxu-nav-logo-icon">🎓</span>
+      无锡学院智能助手
+    </a>
+    <div class="wxu-nav-links">
+      <a href="/" class="wxu-nav-link {% if request.url.path == '/' %}active{% endif %}">🏠 首页</a>
+      <a href="/schedule" class="wxu-nav-link {% if request.url.path.startswith('/schedule') %}active{% endif %}">📅 课表</a>
+      <a href="/scholarship" class="wxu-nav-link {% if request.url.path.startswith('/scholarship') %}active{% endif %}">🏆 奖学金</a>
+      <a href="/campus" class="wxu-nav-link {% if request.url.path.startswith('/campus') %}active{% endif %}">🍜 校园生活</a>
+      <a href="/upload" class="wxu-nav-link {% if request.url.path.startswith('/upload') %}active{% endif %}">📤 上传中心</a>
+      <a href="http://localhost:7861" target="_blank" class="wxu-nav-link" title="旧版问答对话">💬 智能问答</a>
+    </div>
+    <div class="wxu-nav-user" id="user-id-badge">UID: 加载中…</div>
+  </nav>
+
+  <div class="wxu-page">
+    {% block content %}{% endblock %}
+  </div>
+
+  <script>
+    // 显示用户 UID（前 8 位）
+    (function() {
+      const m = document.cookie.match(/wxu_uid=([^;]+)/);
+      if (m) {
+        const uid = m[1].substring(0, 8) + '…';
+        document.getElementById('user-id-badge').textContent = 'UID: ' + uid;
+      }
+    })();
+  </script>
+  {% block extra_script %}{% endblock %}
+</body>
+</html>

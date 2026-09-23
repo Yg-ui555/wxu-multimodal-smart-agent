@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}首页 · 无锡学院智能助手{% endblock %}
+
+{% block content %}
+<div class="wxu-page-title">🏠 首页</div>
+<div class="wxu-page-subtitle">基于 AI Agent + 多模态识别 + RAG 检索的校园智能助手。所有功能独立可访问。</div>
+
+<div class="wxu-card">
+  <div class="wxu-card-title">✨ 个性化推荐</div>
+  <div class="wxu-recommend-grid" id="recommend-grid">
+    <a href="/schedule" class="wxu-recommend-item">
+      <div class="wxu-recommend-icon">📅</div>
+      <div class="wxu-recommend-name">我的课表</div>
+      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">查看/上传课表</div>
+    </a>
+    <a href="/scholarship" class="wxu-recommend-item">
+      <div class="wxu-recommend-icon">🏆</div>
+      <div class="wxu-recommend-name">奖学金</div>
+      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">申请攻略</div>
+    </a>
+    <a href="/campus" class="wxu-recommend-item">
+      <div class="wxu-recommend-icon">🍜</div>
+      <div class="wxu-recommend-name">校园生活</div>
+      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">食堂/活动</div>
+    </a>
+    <a href="/upload" class="wxu-recommend-item">
+      <div class="wxu-recommend-icon">📤</div>
+      <div class="wxu-recommend-name">上传中心</div>
+      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">PDF/图片/YOLO</div>
+    </a>
+  </div>
+</div>
+
+<div class="wxu-card">
+  <div class="wxu-card-title">💬 智能问答（AI Agent）</div>
+  <div style="font-size:13px;color:#6b6580;margin-bottom:12px;">
+    试试问：<i>"今天上啥?"</i> / <i>"奖学金怎么申请?"</i> / <i>"食堂今天有啥?"</i>
+  </div>
+  <div class="wxu-chat-history" id="chat-history">
+    <div style="text-align:center;color:#9d96b0;font-size:13px;padding:20px 0;">
+      还没有对话，问点啥吧 👆
+    </div>
+  </div>
+  <div class="wxu-chat-input-row">
+    <input type="text" id="chat-input" class="wxu-chat-input" placeholder="问我任何校园问题…" autocomplete="off">
+    <button class="wxu-btn" id="chat-send">发送</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+const chatHistory = document.getElementById('chat-history');
+const chatInput = document.getElementById('chat-input');
+const chatSend = document.getElementById('chat-send');
+
+function appendMsg(role, text) {
+  const empty = chatHistory.querySelector('div[style*="text-align:center"]');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'wxu-chat-msg ' + role;
+  div.textContent = text;
+  chatHistory.appendChild(div);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+async function sendQuery() {
+  const q = chatInput.value.trim();
+  if (!q) return;
+  appendMsg('user', q);
+  chatInput.value = '';
+  chatSend.disabled = true;
+
+  const aiMsg = document.createElement('div');
+  aiMsg.className = 'wxu-chat-msg ai';
+  aiMsg.textContent = '…';
+  chatHistory.appendChild(aiMsg);
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: q}),
+    });
+    if (!resp.ok) throw new Error('请求失败');
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    aiMsg.textContent = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      const lines = decoder.decode(value).split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.substring(6).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const obj = JSON.parse(data);
+            if (obj.text) aiMsg.textContent += obj.text;
+          } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {
+    aiMsg.textContent = '⚠️ ' + e.message;
+  } finally {
+    chatSend.disabled = false;
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+  }
+}
+
+chatSend.addEventListener('click', sendQuery);
+chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') sendQuery();
+});
+</script>
+{% endblock %}
