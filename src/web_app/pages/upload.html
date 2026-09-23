@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}上传中心 · 无锡学院智能助手{% endblock %}
+
+{% block content %}
+<div class="wxu-page-title">📤 上传中心</div>
+<div class="wxu-page-subtitle">上传课表 PDF / 校园截图 / 待检测图像 → AI 自动判断 + 处理</div>
+
+<div class="wxu-card">
+  <div class="wxu-card-title">📅 课表 PDF / 截图</div>
+  <input type="file" id="file-schedule" class="wxu-file-input" accept=".pdf,.png,.jpg,.jpeg">
+  <div style="margin-top:8px;font-size:12px;color:#6b6580;">
+    解析后会保存到 <b>我的课表</b>，前往 <a href="/schedule" style="color:#8b5cf6;">/schedule</a> 查看
+  </div>
+  <div id="status-schedule" class="wxu-status" style="display:none;"></div>
+</div>
+
+<div class="wxu-card">
+  <div class="wxu-card-title">🔍 OCR 图片识别（提取文字）</div>
+  <input type="file" id="file-ocr" class="wxu-file-input" accept=".png,.jpg,.jpeg">
+  <div style="margin-top:8px;font-size:12px;color:#6b6580;">
+    用 PaddleOCR 2.7.3 提取图片中的中文字符
+  </div>
+  <div id="status-ocr" class="wxu-status" style="display:none;"></div>
+</div>
+
+<div class="wxu-card">
+  <div class="wxu-card-title">📦 YOLO 物体检测</div>
+  <input type="file" id="file-yolo" class="wxu-file-input" accept=".png,.jpg,.jpeg">
+  <div style="margin-top:8px;font-size:12px;color:#6b6580;">
+    检测图片中的物体（80 类标准 / 开放词汇识别）
+  </div>
+  <div id="status-yolo" class="wxu-status" style="display:none;"></div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+function uploadFile(inputId, statusId, endpoint) {
+  const input = document.getElementById(inputId);
+  const status = document.getElementById(statusId);
+  input.addEventListener('change', async () => {
+    if (!input.files.length) return;
+    const file = input.files[0];
+    status.className = 'wxu-status';
+    status.textContent = '⏳ 上传中…';
+    status.style.display = 'block';
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resp = await fetch(endpoint, {method: 'POST', body: fd});
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || '上传失败');
+      }
+      const data = await resp.json();
+      status.className = 'wxu-status success';
+      if (data.parsed !== undefined) {
+        status.textContent = `✅ 解析成功：${data.parsed} 节课（${data.parse_method}）`;
+      } else {
+        status.textContent = '✅ 上传成功：' + JSON.stringify(data);
+      }
+    } catch (e) {
+      status.className = 'wxu-status error';
+      status.textContent = '❌ ' + e.message;
+    }
+  });
+}
+
+uploadFile('file-schedule', 'status-schedule', '/api/schedule/upload-v2');
+// OCR / YOLO 端点待接入
+</script>
+{% endblock %}
