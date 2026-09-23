@@ -42,3 +42,11 @@ tests/*.html
 # 操作系统
 .DS_Store
 Thumbs.db
+
+# Gradio 运行时生成的证书/缓存（每次启动自动重建）
+.gradio/
+
+# 临时诊断/调试脚本（命名带 _ 前缀，正式脚本在 scripts/ 下不带前缀）
+scripts/_*.py
+scripts/_*.cjs
+# *
