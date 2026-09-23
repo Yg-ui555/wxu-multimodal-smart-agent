@@ -19,6 +19,7 @@
 
 from typing import Dict, List, Optional
 import os
+import re
 import threading
 from langchain_core.prompts import PromptTemplate
 # 提升到顶部（修复 2026-09-17 HIGH #5）：原函数体内延迟导入，单元测试
@@ -283,6 +284,96 @@ class ChatHistoryManager:
             "sources": sources,
             "intent": intent,
         }
+
+    def chat_stream(self, question: str):
+        """
+        chat() 的流式版本（2026-09-20 提速）。
+
+        逐步 yield 三元组 (partial_answer, sources, intent)：
+        - 路由/检索阶段不出字（这部分无法流式），首个 yield 从 LLM 第一个 token 开始
+        - 生成过程中 sources=None，前端显示"正在生成"
+        - 最后一次 yield 给完整 answer + sources 列表（同时已写入历史）
+
+        说明：流式过程中只做轻量清洗（去控制字符），避免反复剥首尾符号造成闪烁；
+        完整 clean_answer 只在结束时做一次。
+        """
+        def _light_clean(text: str) -> str:
+            return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+        with self._lock:
+            # 0. 意图路由
+            intent = self._intent_route(question)
+
+            if intent == "chat":
+                answer = self._chat_reply(question)
+                self._add_to_history(question, answer)
+                yield answer, [], intent
+                return
+
+            # 1. Query 改写（指代消解）
+            rewritten = self._rewrite_query(question)
+
+            # 2. 常识类不检索；知识库类检索
+            if intent == "common":
+                context = ""
+                docs, scores = [], []
+            else:
+                if hasattr(self.retriever, "retrieve_with_scores"):
+                    docs, scores = self.retriever.retrieve_with_scores(rewritten)
+                else:
+                    docs = self.retriever.retrieve(rewritten)
+                    scores = [None] * len(docs)
+                context = "\n\n".join([d.page_content for d in docs])
+
+            # 3. 历史
+            history_str = self._build_history_str()
+
+            # 4. 流式生成（失败则降级为一次性 invoke，保证不白屏）
+            payload = {"context": context, "chat_history": history_str, "question": question}
+            partial = ""
+            try:
+                for chunk in self.qa_chain.stream(payload):
+                    piece = getattr(chunk, "content", None)
+                    if not piece:
+                        continue
+                    partial += piece
+                    yield _light_clean(partial), None, intent
+            except Exception as e:
+                print(f"[chat_stream] 流式失败，降级 invoke: {e!r}", flush=True)
+
+            if not partial.strip():
+                try:
+                    partial = self.qa_chain.invoke(payload).content
+                except Exception as e:
+                    partial = "抱歉，生成回答时出了点问题，请稍后再试一次。"
+                    print(f"[chat_stream] invoke 也失败: {e!r}", flush=True)
+
+            answer = clean_answer(partial.strip()) or partial.strip()
+            self._add_to_history(question, answer)
+
+            # 5. 组装来源（把文章 metadata 也带上，前端可展示图片）
+            sources = []
+            for i, (doc, score) in enumerate(zip(docs, scores)):
+                src = {
+                    "index": i + 1,
+                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                    "source": doc.metadata.get("source", "未知"),
+                    "page": doc.metadata.get("page", ""),
+                    "score": round(float(score), 4) if score is not None else None,
+                }
+                # 公众号文章：带图片/类别/重要性
+                if doc.metadata.get("type") == "wx_article":
+                    src["type"] = "wx_article"
+                    src["file_name"] = doc.metadata.get("file_name", "")
+                    src["category"] = doc.metadata.get("category", "")
+                    src["importance"] = doc.metadata.get("importance", "中")
+                    src["key_info"] = doc.metadata.get("key_info", "")
+                    imgs = doc.metadata.get("images", "")
+                    if imgs:
+                        src["images"] = imgs.split(";")
+                sources.append(src)
+
+            yield answer, sources, intent
 
     def _chat_reply(self, question: str) -> str:
         """闲聊/问候的直接回复"""
