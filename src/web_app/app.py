@@ -1,4 +1,18 @@
 # ============================================================
+# ⚠️ 2026-09-22 此文件已废弃（DEPRICATED）
+# ============================================================
+# 原因：项目从 Gradio 单页迁移到 FastAPI 多页架构（详见 docs/ENGINEERING.md）
+# 新入口：src/web_app/fastapi_app.py（端口 7862）
+# RAG 核心已抽离到 src/rag/rag_engine.py
+#
+# 本文件仅保留作为历史代码 + 课程学习参考，**不要启动它**
+# 如需查看豆包式多 session 隔离 / Gradio Blocks 布局教学，可继续阅读
+#
+# 杀旧进程：Stop-Process -Id 6548 -Force   # 7861 端口
+# 启新服务：powershell -File start.ps1       # 7862 端口
+# ============================================================
+
+# ============================================================
 # 📚 本文件重点掌握能力
 # ============================================================
 # 1. Gradio Blocks 布局（gr.Row / gr.Column / gr.Tabs）
@@ -35,7 +49,8 @@ import sys
 import threading
 
 # 将项目根目录添加到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 import gradio as gr
 from src.rag.vector_store import VectorStoreManager
@@ -47,6 +62,8 @@ from src.ocr import extract_text, add_ocr_to_vectorstore
 from src.web_app.upload_handler import process_uploads
 from src.web_app import user_store
 from src.web_app.image_assistant import look_at_image, build_context_for_chat
+# 2026-09-21 我的课表（PDF/截图 → 周视图）
+from src.curriculum import db as cv_db, parser as cv_parser, ui as cv_ui
 
 
 class RAGApp:
@@ -144,94 +161,22 @@ class RAGApp:
             return False
 
     # ============================================================
-    # 顶层方法：answer_question（多 session 入口）
+    # 顶层流式入口：answer_stream（文字 / 图片统一，多 session）
     # ============================================================
-    def answer_question(
-        self, question: str, history: list = None,
-        session_id: str = "", request: gr.Request = None
-    ) -> tuple:
-        user_id = user_store.resolve_user_id(request=request)
-        session_id = self._ensure_session(user_id, session_id)
-
-        cm = self._get_or_create_chat_manager(user_id, session_id)
-
-        # 服务器端历史是事实来源，UI 从这里恢复
-        server_history = [[q, a] for q, a in cm.recent_history]
-        base_history = []
-        if history:
-            try:
-                for item in history:
-                    if not isinstance(item, (list, tuple)) or len(item) != 2:
-                        continue
-                    base_history.append([str(item[0]), str(item[1])])
-            except Exception:
-                base_history = []
-        if len(base_history) > len(server_history):
-            ui_history = base_history
-        else:
-            ui_history = server_history
-
-        if not question or not question.strip():
-            ui_history.append(["（空查询）", "⚠️ 请输入您的问题"])
-            return _tuples_to_messages(ui_history), "_等待输入问题…_", ""
-
-        try:
-            result = cm.chat(question)
-            answer = str(result.get("answer", "")).strip() or "（未生成答案）"
-
-            docs_md = self._format_docs_md(
-                result.get("sources") or [], str(result.get("intent", ""))
-            )
-
-            final_history = [[q, a] for q, a in cm.recent_history]
-
-            # 持久化：写 state + 更新 title/preview
-            with self._cache_lock:
-                self._flush_user_state_locked(user_id, session_id)
-
-            return _tuples_to_messages(final_history), docs_md, ""
-
-        except Exception as e:
-            err_type = type(e).__name__
-            err_msg = f"❌ 抱歉，处理出错了（{err_type}）。请刷新页面或换个问题再试。"
-            print(f"❌[{err_type}] {e!r}", flush=True)
-            ui_history.append([question.strip(), err_msg])
-            return _tuples_to_messages(ui_history), f"_{err_msg}_", ""
-
-    def _format_docs_md(self, sources: list, intent: str = "") -> str:
-        """把检索到的来源整理成"相关文档"区域的 Markdown（纯文本/图片问答共用）"""
-        if isinstance(sources, list) and sources:
-            files = set()
-            for src in sources:
-                if isinstance(src, dict):
-                    source = str(src.get("source", "")).strip()
-                    if source:
-                        files.add(source)
-            if files:
-                lines = ["**相关文档：**\n"]
-                for f in files:
-                    file_path = os.path.join(self.docs_dir, f)
-                    if os.path.exists(file_path):
-                        lines.append(f"📄 [{f}]({file_path})\n\n")
-                    else:
-                        lines.append(f"📄 {f}\n\n")
-                return "".join(lines)
-            return "_（本次回答未引用库内文档）_"
-        if intent == "chat":
-            return "_（闲聊 / 系统提示，不需要引用库内文档）_"
-        return "_（本次回答未引用库内文档）_"
-
-    def answer_with_image(
+    def answer_stream(
         self, message, history: list = None,
         session_id: str = "", request: gr.Request = None, progress=None,
-    ) -> tuple:
+    ):
         """
-        对话入口（支持文字 + 图片）：
-        - 没图片：走普通文字问答
-        - 有图片：自动认东西 + 读文字，把结果连同学生的问题一起交给问答大脑，
-          回答上方附上"画好框的结果图"
+        流式对话入口。每次 yield 三元组 (chatbot_messages, docs_md, msg_box)：
+        1) 首次 yield：立刻回显用户消息 + "正在思考"占位（消除干等）
+        2) 之后：LLM 逐 token 更新助手气泡
+        3) 末次：完整答案 + 相关文档
         """
-        # ---- 解析输入（MultimodalTextbox 给的是 {"text":..., "files":[...]}）----
+        cleared_box = gr.MultimodalTextbox(value=None, interactive=True)
+        keep_box = gr.update()  # 流式后续帧不再碰输入框，避免反复重绘丢焦点
+
+        # ---- 解析输入（MultimodalTextbox: {"text":..., "files":[...]}）----
         if isinstance(message, dict):
             text = str(message.get("text", "") or "").strip()
             files = message.get("files") or []
@@ -244,59 +189,139 @@ class RAGApp:
             first = files[0]
             image_path = first.get("path") if isinstance(first, dict) else str(first)
 
-        # ---- 没有有效图片：直接走文字链路 ----
-        if not image_path or not os.path.exists(image_path):
-            return self.answer_question(text, history, session_id=session_id, request=request)
-
         user_id = user_store.resolve_user_id(request=request)
         session_id = self._ensure_session(user_id, session_id)
         cm = self._get_or_create_chat_manager(user_id, session_id)
 
-        ui_messages = list(history) if isinstance(history, list) else []
-        # 学生这边的气泡：图片在上、想问的话在下
-        ui_messages.append({
-            "role": "user",
-            "content": ([{"path": image_path}, text] if text else {"path": image_path}),
-        })
+        # 历史以前端传入的 messages 为准（dict 列表）
+        base = []
+        if isinstance(history, list):
+            base = [m for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+
+        # 空输入：不处理
+        if not text and not image_path:
+            yield base, "_⚠️ 请输入您的问题_", cleared_box
+            return
+
+        # ==================== 图片分支 ====================
+        if image_path and os.path.exists(image_path):
+            user_content = ([{"path": image_path}, text] if text else {"path": image_path})
+            msgs = base + [{"role": "user", "content": user_content}]
+            # 立即回显，避免 YOLO/OCR 识别期间白屏
+            yield msgs + [{"role": "assistant", "content": "🔍 正在看这张图，请稍等…"}], "_🔍 正在识别图片…_", cleared_box
+
+            try:
+                info = look_at_image(image_path, progress=progress)
+                enhanced_question, display_question = build_context_for_chat(info, text)
+                annotated = bool(info.get("annotated_path") and info.get("objects"))
+
+                streamed = False
+                final_sources, intent = [], ""
+                for partial, sources, intent in cm.chat_stream(enhanced_question):
+                    streamed = True
+                    shown = [{"path": info["annotated_path"]}, partial] if annotated else partial
+                    docs_md = self._format_docs_md(sources, intent) if sources else "_✍️ 正在组织回答…_"
+                    yield msgs + [{"role": "assistant", "content": shown}], docs_md, keep_box
+                    if sources:
+                        final_sources = sources
+                if not streamed:
+                    yield msgs + [{"role": "assistant", "content": "（我没太看懂这张图，可以再拍清楚一点或补一句问题试试）"}], "_（未识别到内容）_", keep_box
+
+                # 内部历史存的是"增强问题"，又长又技术；替换成学生能看懂的一句话
+                try:
+                    with cm._lock:
+                        if cm.recent_history:
+                            cm.recent_history[-1] = (display_question, cm.recent_history[-1][1])
+                except Exception:
+                    pass
+
+                with self._cache_lock:
+                    self._flush_user_state_locked(user_id, session_id)
+
+            except Exception as e:
+                err_type = type(e).__name__
+                err_msg = "❌ 这张图我没看明白，换张清楚点的图，或者直接把想问的字打给我试试。"
+                print(f"❌[image {err_type}] {e!r}", flush=True)
+                yield msgs + [{"role": "assistant", "content": err_msg}], f"_{err_msg}_", keep_box
+            return
+
+        # ==================== 文字分支 ====================
+        msgs = base + [{"role": "user", "content": text}]
+        # 立即回显 + 占位（检索/重排阶段无法流式，先给反馈）
+        yield msgs + [{"role": "assistant", "content": "🤔 正在思考…"}], "_🤔 正在查找资料…_", cleared_box
 
         try:
-            # 1) 看图：认东西 + 读文字
-            info = look_at_image(image_path, progress=progress)
-            # 2) 整理成给问答大脑的上下文
-            enhanced_question, display_question = build_context_for_chat(info, text)
-            # 3) 交给问答大脑（意图路由 / 知识库检索 / 多轮记忆全复用）
-            result = cm.chat(enhanced_question)
-            answer = str(result.get("answer", "")).strip() or "（我没太看懂这张图，可以再拍清楚一点或补一句问题试试）"
-
-            # 内部历史里存的是"增强问题"，又长又技术；换成学生能看懂的一句话
-            try:
-                with cm._lock:
-                    if cm.recent_history:
-                        cm.recent_history[-1] = (display_question, answer)
-            except Exception:
-                pass
-
-            docs_md = self._format_docs_md(
-                result.get("sources") or [], str(result.get("intent", ""))
-            )
-
-            # 4) 回答气泡：认出东西时把"画好框的图"放在回答上方
-            assistant_content = answer
-            if info.get("annotated_path") and info.get("objects"):
-                assistant_content = [{"path": info["annotated_path"]}, answer]
-            ui_messages.append({"role": "assistant", "content": assistant_content})
+            streamed = False
+            final_sources, intent = [], ""
+            for partial, sources, intent in cm.chat_stream(text):
+                streamed = True
+                docs_md = self._format_docs_md(sources, intent) if sources else "_✍️ 正在生成回答…_"
+                yield msgs + [{"role": "assistant", "content": partial or "…"}], docs_md, keep_box
+                if sources:
+                    final_sources = sources
 
             with self._cache_lock:
                 self._flush_user_state_locked(user_id, session_id)
 
-            return ui_messages, docs_md, ""
+            if not streamed:
+                yield msgs + [{"role": "assistant", "content": "（未生成答案）"}], "_（未生成答案）_", keep_box
 
         except Exception as e:
             err_type = type(e).__name__
-            err_msg = "❌ 这张图我没看明白，换张清楚点的图，或者直接把想问的字打给我试试。"
-            print(f"❌[image {err_type}] {e!r}", flush=True)
-            ui_messages.append({"role": "assistant", "content": err_msg})
-            return ui_messages, f"_{err_msg}_", ""
+            err_msg = f"❌ 抱歉，处理出错了（{err_type}）。请刷新页面或换个问题再试。"
+            print(f"❌[{err_type}] {e!r}", flush=True)
+            yield msgs + [{"role": "assistant", "content": err_msg}], f"_{err_msg}_", keep_box
+
+    def _format_docs_md(self, sources: list, intent: str = "") -> str:
+        """把检索到的来源整理成"相关文档"区域的 Markdown。
+        公众号文章会展示标题、类别、关键信息和图片。"""
+        if not (isinstance(sources, list) and sources):
+            if intent == "chat":
+                return "_（闲聊 / 系统提示，不需要引用库内文档）_"
+            return "_（本次回答未引用库内文档）_"
+
+        lines = []
+        seen_titles = set()
+
+        for src in sources:
+            if not isinstance(src, dict):
+                continue
+
+            # 公众号文章：展示标题+类别+关键信息+图片
+            if src.get("type") == "wx_article":
+                title = src.get("file_name") or src.get("source", "")
+                if title in seen_titles:
+                    continue
+                seen_titles.add(title)
+
+                cat = src.get("category", "")
+                imp = src.get("importance", "中")
+                key_info = src.get("key_info", "")
+                images = src.get("images", [])
+
+                lines.append(f"**📰 {title}**\n")
+                lines.append(f"> 类别：{cat} · 重要性：{imp}\n\n")
+                if key_info:
+                    lines.append(f"关键信息：{key_info}\n\n")
+
+                # 展示图片（最多 3 张）
+                if images:
+                    for img in images[:3]:
+                        if os.path.exists(img):
+                            # Gradio 用 /file= 代理本地文件
+                            lines.append(f"![图片](/file={img})\n\n")
+                continue
+
+            # 普通文档
+            source = str(src.get("source", "")).strip()
+            if source:
+                file_path = os.path.join(self.docs_dir, source)
+                if os.path.exists(file_path):
+                    lines.append(f"📄 [{source}]({file_path})\n\n")
+                else:
+                    lines.append(f"📄 {source}\n\n")
+
+        return "".join(lines) if lines else "_（本次回答未引用库内文档）_"
 
     def clear_history(self, session_id: str = "", request: gr.Request = None) -> list:
         user_id = user_store.resolve_user_id(request=request)
@@ -367,8 +392,8 @@ class RAGApp:
             use_bm25=True,
             use_reranker=True,
             reranker_model='BAAI/bge-reranker-v2-m3',  # 2026-09-20 启用（首次启动会下载 ~2.27 GB）
-            vector_top_k=5,  # 2026-09-20 减 rerank 输入数：10 → 5（latency 砍半，pass_rate 几乎不掉）
-            bm25_top_k=5,    # 同上
+            vector_top_k=8,  # 2026-09-20 提速：候选 10→8（实测 5 时 pass_rate 掉到 73%，8 折中）
+            bm25_top_k=8,    # 两路各召回 8，RRF 融合后 reranker 精排 8 → top4
             use_hyde=False,  # 2026-09-18：先关闭，等 qa_system 建好再开启
             hyde_llm=None,
         )
@@ -436,14 +461,98 @@ def _tuples_to_messages(history):
 # ============================================================
 SCENARIOS = [
     ("📅 我的课表", "今天上啥?下周怎么安排?"),
-    ("🎓 学分进度", "我这学期修了几分,还差几分能毕业?"),
     ("🏆 奖学金", "奖学金怎么申请?校一等奖学金条件是啥?"),
     ("📝 考试安排", "这学期期末考啥时候?校历给我看看"),
-    ("💼 实习招聘", "最近有啥校招宣讲会?嵌入式岗位"),
     ("🍜 校园生活", "学校食堂哪个最好吃?周边有啥好玩的?"),
     ("🔔 教务通知", "最近有啥重要通知?奖学金截止时间"),
-    ("🤖 学科答疑", "高数题不会,数电这门课重点是啥?"),
 ]
+# 2026-09-21 移除：学分进度 / 实习招聘 / 学科答疑（按用户要求删掉）
+
+
+# ============================================================
+# 我的课表 处理器（2026-09-21）
+# ============================================================
+def _cv_parse_curriculum_file(file_path, request: gr.Request):
+    """解析上传的 PDF/截图，填充编辑器 + 预览 + OCR 原文"""
+    if not file_path:
+        return cv_ui.render_empty_view(), "⚠️ 请先选择文件", gr.update(value=[])
+    try:
+        result = cv_parser.parse_uploaded_file(file_path)
+        rows = cv_ui.courses_to_editor_rows(result["parsed"])
+        preview_html = cv_ui.render_parsed_preview(result["parsed"], result["unparsed_lines"])
+        stats = result.get("stats", {})
+        status_md = (
+            f"✅ 已解析 **{stats.get('parsed_count', 0)}** 条 / "
+            f"未识别 **{stats.get('unparsed_count', 0)}** 条 / "
+            f"原文 **{stats.get('raw_text_lines', 0)}** 行（解析率 {int(stats.get('parse_rate', 0) * 100)}%）"
+        )
+        if result["file_type"] == "image":
+            # 截图模式：附 OCR 原文供用户参考
+            raw_html = cv_ui.render_raw_text_preview(result["raw_text"], result["source"])
+            return preview_html, raw_html, gr.update(value=rows), status_md
+        # PDF 模式：原文太长不展示
+        return preview_html, "", gr.update(value=rows), status_md
+    except Exception as e:
+        return (
+            cv_ui.render_empty_view(),
+            "",
+            gr.update(value=[]),
+            f"❌ 解析失败: {type(e).__name__}: {e}",
+        )
+
+
+def _cv_save_curriculum(rows, request: gr.Request):
+    """保存编辑后的课表到 SQLite"""
+    user_id = request.cookies.get("wxu_uid", "anonymous") if request else "anonymous"
+    if not rows:
+        return "⚠️ 表格为空", cv_ui.render_empty_view()
+    courses = cv_ui.editor_rows_to_courses(rows)
+    if not courses:
+        return "⚠️ 表格中没有有效数据（请至少填写课程名）", cv_ui.render_empty_view()
+    result = cv_db.save_curriculum(user_id, courses, source="用户编辑")
+    saved = cv_db.load_curriculum(user_id)
+    week_view = cv_ui.render_week_view(saved, current_week=1)
+    msg = (
+        f"✅ 已保存 **{result['saved']}** 条"
+        f"（跳过 {result['skipped']} 条无效"
+        + (f" / {len(result['errors'])} 条错误" if result['errors'] else "")
+        + "）"
+    )
+    return msg, week_view
+
+
+def _cv_load_curriculum(request: gr.Request):
+    """从 SQLite 加载当前用户的课表 + 周视图"""
+    user_id = request.cookies.get("wxu_uid", "anonymous") if request else "anonymous"
+    courses = cv_db.load_curriculum(user_id)
+    rows = cv_ui.courses_to_editor_rows(courses)
+    week_view = cv_ui.render_week_view(courses, current_week=1) if courses else cv_ui.render_empty_view()
+    return gr.update(value=rows), week_view
+
+
+def _cv_clear_curriculum(request: gr.Request):
+    """清空当前用户的课表"""
+    user_id = request.cookies.get("wxu_uid", "anonymous") if request else "anonymous"
+    deleted = cv_db.clear_curriculum(user_id)
+    return gr.update(value=[]), cv_ui.render_empty_view(), f"🗑️ 已清空 {deleted} 条课表"
+
+
+def _cv_download_html(request: gr.Request):
+    """导出当前用户的课表为独立 HTML 文件（双击打开 / 分享）"""
+    user_id = request.cookies.get("wxu_uid", "anonymous") if request else "anonymous"
+    courses = cv_db.load_curriculum(user_id)
+    if not courses:
+        return gr.update(value=None, visible=False)
+    import tempfile, os
+    from datetime import datetime
+    html_str = cv_ui.render_standalone_html(courses, current_week=1, title="我的课表")
+    # 写到临时目录（Gradio 缓存友好路径）
+    tmp_dir = tempfile.gettempdir()
+    fname = f"my_schedule_{user_id[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    fpath = os.path.join(tmp_dir, fname)
+    with open(fpath, "w", encoding="utf-8") as f:
+        f.write(html_str)
+    return gr.update(value=fpath, visible=True)
 
 CLUBS_HTML = """
 <div class="wxu-club-grid">
@@ -549,12 +658,16 @@ CAMPUS_INFO_HTML = """
 </div>
 """
 
+# 期末复习资料卡片（合规修订 2026-09-21）
+# 合规要求：依据《无锡学院关于试卷印制、保管和保存的实施办法（试行）》，
+# 试卷（含空白卷、参考答案）属于教学档案，保密管理，不得向学生披露。
+# 因此 UI 不展示"真题"、"参考答案"、"往年考卷"、"题库 + 解析"等敏感字眼。
 EXAM_RESOURCES = [
-    ("📐", "高等数学(下)· 期末高频考点", "7 章节重点 · 32 同学收藏 · 基于往年考卷聚类", "hot"),
-    ("🔌", "电路分析 · 重点题库 + 解析", "187 道 · 4.8 同学评分 · 学长整理", "hot"),
-    ("💻", "C 语言程序设计 · 历年真题(2018-2025)", "8 套卷 · 含参考答案 · 教研室发布", "new"),
+    ("📐", "高等数学(下)· 复习提纲", "7 章节重点 · 配套讲义索引", "hot"),
+    ("🔌", "电路分析 · 复习要点速查", "覆盖课程大纲 · 同步课堂讲义", "hot"),
+    ("💻", "C 语言程序设计 · 复习提纲", "覆盖 2018-2025 教学大纲 · 配套课后习题", "new"),
     ("📡", "物联网通信技术 · 思维导图 + 速记卡", "22 张思维导图 · 156 张速记卡", "new"),
-    ("📖", "马原 · 期末冲刺笔记(2026 修订版)", "48 页 · 思政教研室审核 · 89 同学在看", ""),
+    ("📖", "马原 · 复习笔记(2026 修订版)", "48 页 · 思政教研室审核 · 89 同学在看", ""),
 ]
 
 def _build_exam_html():
@@ -930,11 +1043,82 @@ def build_gradio_interface(app: RAGApp) -> gr.Blocks:
                 with gr.Row():
                     for label, query in SCENARIOS[:4]:
                         btn = gr.Button(label, elem_classes="wxu-scenario-btn", size="sm")
-                        scenario_buttons.append((btn, query))
+                        # 2026-09-21 特殊标记 "我的课表"（触发专属面板）
+                        if "我的课表" in label:
+                            scenario_buttons.append((btn, "__CURRICULUM__"))
+                        else:
+                            scenario_buttons.append((btn, query))
                 with gr.Row():
                     for label, query in SCENARIOS[4:]:
                         btn = gr.Button(label, elem_classes="wxu-scenario-btn", size="sm")
-                        scenario_buttons.append((btn, query))
+                        if "我的课表" in label:
+                            scenario_buttons.append((btn, "__CURRICULUM__"))
+                        else:
+                            scenario_buttons.append((btn, query))
+
+                # 我的课表面板（点击"我的课表"按钮时显示，默认隐藏）
+                with gr.Column(visible=False) as curriculum_panel:
+                    gr.HTML('<div class="wxu-section-title">📅 我的课表 · 上传 / 编辑 / 查看</div>')
+                    gr.HTML(
+                        '<div style="font-size:12px;color:#6b6580;margin-bottom:10px;line-height:1.6;">'
+                        '📌 上传教务系统导出的 <b>PDF</b>（最准） 或 <b>课表截图</b>（截图 OCR 准确率有限，建议手动修正）'
+                        '<br>📌 也可以直接在下方表格里手动添加/编辑课程（推荐）'
+                        '</div>'
+                    )
+                    with gr.Row():
+                        cv_file = gr.File(label="选择 PDF / 图片", file_count="single", type="filepath",
+                                          file_types=[".pdf", ".png", ".jpg", ".jpeg"])
+                        cv_parse_btn = gr.Button("🔍 解析", variant="primary", size="sm")
+                        cv_refresh_btn = gr.Button("🔄 重新加载", size="sm")
+                        cv_clear_btn = gr.Button("🗑️ 清空", variant="stop", size="sm")
+                    cv_status = gr.Markdown()
+                    cv_preview = gr.HTML()
+                    cv_raw_text = gr.HTML()
+                    gr.HTML('<div style="margin:14px 0 6px 0;color:#6b6580;font-size:12px;font-weight:600;">📝 课程列表（手动编辑 → 保存）</div>')
+                    cv_editor = gr.Dataframe(
+                        headers=["课程名", "教师", "地点", "星期", "开始节", "结束节", "开始周", "结束周", "周类型"],
+                        datatype=["str", "str", "str", "number", "number", "number", "number", "number", "str"],
+                        row_count=(0, "dynamic"),
+                        interactive=True,
+                        show_label=False,
+                    )
+                    with gr.Row():
+                        cv_save_btn = gr.Button("💾 保存到我的课表", variant="primary")
+                    gr.HTML('<div style="margin:18px 0 8px 0;color:#6b6580;font-size:12px;font-weight:600;">👀 周视图预览</div>')
+                    cv_week_view = gr.HTML()
+                    # 2026-09-22 下载独立 HTML（用户能双击打开 / 分享）
+                    gr.HTML('<div style="margin:14px 0 6px 0;color:#6b6580;font-size:12px;font-weight:600;">📥 下载独立 HTML 网页（双击就能在浏览器打开）</div>')
+                    with gr.Row():
+                        cv_download_btn = gr.Button("⬇️ 下载周视图 HTML", variant="secondary", size="sm")
+                        cv_download_file = gr.File(label="下载文件", interactive=False, visible=False)
+
+                    # 2026-09-21 我的课表按钮事件绑定
+                    cv_parse_btn.click(
+                        fn=_cv_parse_curriculum_file,
+                        inputs=[cv_file],
+                        outputs=[cv_preview, cv_raw_text, cv_editor, cv_status],
+                    )
+                    cv_save_btn.click(
+                        fn=_cv_save_curriculum,
+                        inputs=[cv_editor],
+                        outputs=[cv_status, cv_week_view],
+                    )
+                    cv_refresh_btn.click(
+                        fn=_cv_load_curriculum,
+                        inputs=[],
+                        outputs=[cv_editor, cv_week_view],
+                    )
+                    cv_clear_btn.click(
+                        fn=_cv_clear_curriculum,
+                        inputs=[],
+                        outputs=[cv_editor, cv_week_view, cv_status],
+                    )
+                    # 2026-09-22 下载 HTML 按钮（导出独立网页）
+                    cv_download_btn.click(
+                        fn=_cv_download_html,
+                        inputs=[],
+                        outputs=[cv_download_file],
+                    )
 
                 # 学校特色
                 gr.HTML('<div class="wxu-section-title">🎯 校园生活情报</div>')
@@ -1010,12 +1194,20 @@ def build_gradio_interface(app: RAGApp) -> gr.Blocks:
                     return gr.Radio(choices=app.list_sessions(request=req), value=sid)
 
                 # 场景卡 → 填入输入框（MultimodalTextbox 的值是 {"text","files"}）
+                # 2026-09-21 特殊："我的课表"按钮改为显示 curriculum_panel（不填 msg_box）
                 for btn, query in scenario_buttons:
-                    btn.click(
-                        fn=lambda q=query: {"text": q, "files": []},
-                        inputs=[],
-                        outputs=[msg_box],
-                    )
+                    if query == "__CURRICULUM__":
+                        btn.click(
+                            fn=lambda: gr.update(visible=True),
+                            inputs=[],
+                            outputs=[curriculum_panel],
+                        )
+                    else:
+                        btn.click(
+                            fn=lambda q=query: {"text": q, "files": []},
+                            inputs=[],
+                            outputs=[msg_box],
+                        )
 
                 # session 操作
                 session_list.change(
@@ -1040,11 +1232,11 @@ def build_gradio_interface(app: RAGApp) -> gr.Blocks:
                 )
 
                 # 发送（文字 / 图片都走这里；回车或点输入框自带的发送按钮）
+                # 2026-09-20：改为流式 generator，LLM 逐 token 回显，需要 queue 支持
                 def _on_submit(message, history, sid, request: gr.Request, progress=gr.Progress()):
-                    messages, docs_md, _ = app.answer_with_image(
+                    yield from app.answer_stream(
                         message, history, session_id=sid, request=request, progress=progress,
                     )
-                    return messages, docs_md, gr.MultimodalTextbox(value=None, interactive=True)
 
                 msg_box.submit(
                     fn=_on_submit,
@@ -1126,11 +1318,18 @@ def main():
     print("\n正在启动 Gradio 界面...")
     demo = build_gradio_interface(app)
 
+    # 流式输出（generator 逐 token 回显）依赖 queue
+    demo.queue(default_concurrency_limit=4)
     demo.launch(
         server_name="0.0.0.0",
         server_port=7861,
         share=False,
         inbrowser=True,
+        # 允许访问公众号文章图片目录，供 /file= 代理显示
+        allowed_paths=[
+            os.path.join(PROJECT_ROOT, "data", "wx_articles"),
+            os.path.join(PROJECT_ROOT, "data", "docs"),
+        ],
     )
 
 
