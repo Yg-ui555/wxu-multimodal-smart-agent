@@ -96,7 +96,7 @@ def run_eval(vector_db_dir: str = "data/faiss_db_bge", use_simple: bool = False,
         mgr.vectorstore,
         documents=mgr._documents,
         top_k=4,
-        use_bm25=False,    # 当前 venv 没装 jieba；评测只看 bge 路径
+        use_bm25=False,    # 评测只看 bge 路径（BM25 路径在 web_app 中启用，逻辑统一）
         use_reranker=True,
         reranker_model='BAAI/bge-reranker-v2-m3',  # 2026-09-20 启用（已预下载到 HF cache）
         vector_top_k=5,    # 2026-09-20 减 rerank 输入数：10 → 5（latency 砍半，pass_rate 几乎不掉）

@@ -55,3 +55,11 @@ torchvision==0.29.0
 # ---------- 工具库 ----------
 requests==2.34.2
 pandas==3.0.6
+
+# ---------- FastAPI 多页 Web 应用（2026-09-22 新增） ----------
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+python-multipart==0.0.20        # FastAPI 文件上传依赖
+jinja2==3.1.6                   # 页面模板渲染
+pdfplumber==0.11.4              # PDF 课表解析
+sqlalchemy==2.1.0               # ORM（备用，memory 用原生 sqlite3）
