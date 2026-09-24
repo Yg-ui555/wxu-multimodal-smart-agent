@@ -331,6 +331,19 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// 2026-09-24:检测疑似 marker / 裸 JSON 的 text(LLM 幻觉输出)
+// 用于前端 sendQuery 过滤,避免 UI 弹 "<<WXU_DOCS_...>>:[{...}]"
+function looksLikeMarkerOrJson(text) {
+  if (!text) return false;
+  const t = String(text).trim();
+  // 1. 包含 marker 字符串(后端 __SOURCES__ 或新 <<WXU_DOCS>>)
+  if (t.includes('__SOURCES__:')) return true;
+  if (t.includes('<<WXU_DOCS_')) return true;
+  // 2. 裸 JSON 对象/数组(以 [ 或 { 开头 + 含 "index" 或 "source" 字段)
+  if ((t.startsWith('[{') || t.startsWith('{')) && /["']index["']/.test(t) && /["']source["']/.test(t)) return true;
+  return false;
+}
+
 function clearChat() {
   chatHistory.innerHTML = '<div class="wxu-chat-empty">还没有对话,从上方输入问题开始 👆</div>';
 }
@@ -563,6 +576,10 @@ async function sendQuery() {
           try {
             const obj = JSON.parse(data);
             if (obj.text) {
+              // 2026-09-24 防御性过滤:LLM 可能模仿输出 marker 或裸 JSON
+              // 后端用 <<WXU_DOCS_b3f9a2e1>>: 但 LLM 看到 prompt 后可能照样模仿
+              // 这里前端兜底,任何疑似 marker / JSON / sources 帧的 text 不渲染
+              if (looksLikeMarkerOrJson(obj.text)) continue;
               aiTextBuffer += obj.text;
               scheduleRender();  // 节流:60fps 一次重渲染
             }
