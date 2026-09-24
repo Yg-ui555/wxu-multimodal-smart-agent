@@ -694,6 +694,33 @@ button { font-family: inherit; cursor: pointer; }
   .wxu-page-title { font-size: 24px; }
 }
 
+/* ---------- Confidence 信度色块(2026-09-24 ③) ---------- */
+.wxu-confidence {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.7);
+  cursor: help;
+  user-select: none;
+}
+.wxu-confidence-high {
+  background: rgba(209, 250, 229, 0.85);
+}
+.wxu-confidence-mid {
+  background: rgba(254, 243, 199, 0.85);
+}
+.wxu-confidence-low {
+  background: rgba(254, 226, 226, 0.85);
+}
+.wxu-confidence-none {
+  background: rgba(241, 245, 240, 0.85);
+  color: var(--ink-mute);
+}
+
 /* ---------- Citation 引用标注 + hover 弹窗(2026-09-24 加) ---------- */
 .wxu-cite {
   color: var(--accent-deep);

@@ -472,6 +472,35 @@ sessionList.addEventListener('change', () => {
 
 newSessionBtn.addEventListener('click', createNewSession);
 
+// ---------- 信度色块(2026-09-24 ③) ----------
+// sources[0].score → 🟢 ≥0.7 高 / 🟡 0.4-0.7 一般 / 🔴 <0.4 瞎猜 / ⚪ 无资料常识答
+function computeConfidence(sources) {
+  if (!sources || sources.length === 0) return {level: 'none', label: '无资料', emoji: '⚪'};
+  const top = sources[0].score;
+  if (top === null || top === undefined) return {level: 'none', label: '无打分', emoji: '⚪'};
+  if (top >= 0.7) return {level: 'high', label: '高', emoji: '🟢', score: top};
+  if (top >= 0.4) return {level: 'mid', label: '一般', emoji: '🟡', score: top};
+  return {level: 'low', label: '瞎猜', emoji: '🔴', score: top};
+}
+
+function applyConfidenceBadge(aiMsg, sources) {
+  // 移除旧 badge
+  const old = aiMsg.querySelector('.wxu-confidence');
+  if (old) old.remove();
+  const conf = computeConfidence(sources);
+  const badge = document.createElement('div');
+  badge.className = `wxu-confidence wxu-confidence-${conf.level}`;
+  badge.textContent = conf.emoji;
+  badge.title = conf.score !== undefined
+    ? `检索 Top-1 分数 ${conf.score} · 信度:${conf.label}`
+    : `信度:${conf.label}`;
+  // 插到 aiMsg 右上角
+  if (getComputedStyle(aiMsg).position === 'static') {
+    aiMsg.style.position = 'relative';
+  }
+  aiMsg.appendChild(badge);
+}
+
 // ---------- 发问(流式) ----------
 async function sendQuery() {
   const q = chatInput.value.trim();
@@ -526,6 +555,11 @@ async function sendQuery() {
             if (obj.sources && Array.isArray(obj.sources) && obj.sources.length > 0) {
               // 2026-09-24:把 sources 存到 aiMsg,渲染时会转 [N] 为可 hover
               aiMsg._sources = obj.sources;
+              applyConfidenceBadge(aiMsg, obj.sources);
+            } else if (obj.sources && Array.isArray(obj.sources) && obj.sources.length === 0) {
+              // 走 fallback(无召回),信度 = 无资料
+              aiMsg._sources = [];
+              applyConfidenceBadge(aiMsg, []);
             }
             if (obj.sid && obj.sid !== currentSid) {
               // 后端给了 sid(说明新建了 session),同步本地
