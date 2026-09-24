@@ -27,6 +27,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.concurrency import run_in_threadpool  # 2026-09-22 新增：把同步阻塞调用丢线程池
 
+# 2026-09-24 ⑥:API 限流(防滥用 / 防 LLM 配额被打爆)
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 # 让 src 包可被 import
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -100,6 +105,11 @@ app = FastAPI(title="无锡学院智能助手 · 多页版", version="1.0")
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# 2026-09-24 ⑥:API 限流器(全局注册,默认按 remote_address 限流)
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 log.info("FastAPI 应用初始化完成")
 
@@ -612,6 +622,7 @@ async def api_session_switch(request: Request):
 
 
 @app.post("/api/chat")
+@limiter.limit("30/minute")  # 2026-09-24 ⑥:每个 IP 每分钟最多 30 次 chat(防 LLM 配额被刷爆)
 async def api_chat(request: Request):
     """
     AI Agent 对话入口(2026-09-23 改成真正的 SSE 流式,2026-09-24 加多 session + 多轮 history)
