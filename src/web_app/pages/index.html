@@ -90,6 +90,8 @@
       <div class="wxu-chat-input-row">
         <input type="text" id="chat-input" class="wxu-chat-input" placeholder="打在这里,Enter 发送" autocomplete="off">
         <button class="wxu-btn" id="chat-send">发送</button>
+        <button class="wxu-btn-ghost" id="chat-stop" style="display:none;" title="停止生成">⏹</button>
+        <button class="wxu-btn-ghost" id="chat-retry" style="display:none;" title="重新生成">🔄</button>
       </div>
     </section>
   </main>
@@ -195,12 +197,16 @@
 const chatHistory = document.getElementById('chat-history');
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
+const chatStop = document.getElementById('chat-stop');
+const chatRetry = document.getElementById('chat-retry');
 const sessionList = document.getElementById('session-list');
 const newSessionBtn = document.getElementById('new-session-btn');
 const titleEl = document.getElementById('current-session-title');
 const titleInput = document.getElementById('current-session-title-input');
 
 let currentSid = '';  // 当前会话 sid(cookie wxu_sid)
+let currentController = null;  // 2026-09-24 ②:当前流式请求的 AbortController
+let lastQuery = '';  // 2026-09-24 ②:最近一次问的问题(给"重新生成"用)
 
 // ---------- 工具 ----------
 function appendMsg(role, text) {
@@ -508,11 +514,17 @@ async function sendQuery() {
   appendMsg('user', q);
   chatInput.value = '';
   chatSend.disabled = true;
+  chatStop.style.display = '';
+  chatRetry.style.display = 'none';
+  lastQuery = q;  // 给"重新生成"用
 
   const aiMsg = document.createElement('div');
   aiMsg.className = 'wxu-chat-msg ai';
   aiMsg.textContent = '…';
   chatHistory.appendChild(aiMsg);
+
+  // 2026-09-24 ②:AbortController 支持中途停止
+  currentController = new AbortController();
 
   // 2026-09-24 加:流式 markdown 累积 + 节流重渲染(rAF,避免每个 chunk 都重渲染)
   let aiTextBuffer = '';
@@ -528,11 +540,13 @@ async function sendQuery() {
     requestAnimationFrame(flushRender);
   };
 
+  let aborted = false;
   try {
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({query: q}),
+      signal: currentController.signal,
     });
     if (!resp.ok) throw new Error('请求失败');
     const reader = resp.body.getReader();
@@ -577,12 +591,43 @@ async function sendQuery() {
     await loadSessionList();
     updateTitleDisplay();
   } catch (e) {
-    aiMsg.textContent = '⚠️ ' + e.message;
+    if (e.name === 'AbortError') {
+      aborted = true;
+      // 用户主动停止:标记当前 aiMsg
+      if (aiTextBuffer) {
+        aiTextBuffer += '\n\n*(已停止生成)*';
+      } else {
+        aiTextBuffer = '*(已停止生成)*';
+      }
+      flushRender();
+    } else {
+      aiMsg.textContent = '⚠️ ' + e.message;
+    }
   } finally {
     chatSend.disabled = false;
+    currentController = null;
+    chatStop.style.display = 'none';
+    chatRetry.style.display = '';  // 流完/停止都显示"重新生成"
     chatHistory.scrollTop = chatHistory.scrollHeight;
   }
 }
+
+// 2026-09-24 ②:停止按钮 — abort 当前请求
+chatStop.addEventListener('click', () => {
+  if (currentController) {
+    currentController.abort();
+  }
+});
+
+// 2026-09-24 ②:重新生成按钮 — 再发一次 lastQuery
+chatRetry.addEventListener('click', async () => {
+  if (!lastQuery) return;
+  // 把刚才 aiMsg 删掉,重新发问
+  const lastAiMsg = chatHistory.querySelector('.wxu-chat-msg.ai:last-of-type');
+  if (lastAiMsg) lastAiMsg.remove();
+  chatInput.value = lastQuery;
+  await sendQuery();
+});
 
 chatSend.addEventListener('click', sendQuery);
 chatInput.addEventListener('keydown', e => {
