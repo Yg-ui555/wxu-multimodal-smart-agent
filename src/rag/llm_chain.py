@@ -363,7 +363,8 @@ class LLMQASystem:
                     "page": doc.metadata.get("page", ""),
                     "score": round(score, 4) if score is not None else None,
                 })
-            yield f"\n\n__SOURCES__:{json.dumps(sources, ensure_ascii=False)}"
+            # 2026-09-24:marker 改随机后缀(防 LLM 模仿输出,0 时刻显示给用户)
+            yield f"\n\n<<WXU_DOCS_b3f9a2e1>>:{json.dumps(sources, ensure_ascii=False)}"
 
     def answer_simple(self, question: str) -> str:
         """
