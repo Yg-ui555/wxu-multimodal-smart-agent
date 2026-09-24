@@ -78,7 +78,38 @@ def _get_rag():
             return None
 
 
-def _rag_answer(query: str, uid: str) -> Dict:
+def _load_session_history(uid: str, sid: str, limit: int = 12):
+    """加载指定 session 的历史 messages（2026-09-24 加：多轮对话）
+
+    来源：user_store.load_state(uid, sid) 里的 recent_history 字段
+    格式：[{"role":"user/assistant","content":"..."}, ...]（取最近 limit 条）
+    """
+    if not uid or not sid:
+        return []
+    try:
+        from src.web_app import user_store
+        state = user_store.load_state(uid, sid) or {}
+        history = state.get("recent_history", []) or []
+        # 兼容 Gradio tuple 格式 [[q,a,a], ...]
+        if history and isinstance(history[0], (list, tuple)):
+            converted = []
+            for pair in history:
+                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                    q, a = pair[0], pair[1]
+                    if q:
+                        converted.append({"role": "user", "content": str(q)})
+                    if a:
+                        converted.append({"role": "assistant", "content": str(a)})
+            history = converted
+        # 只取最近 limit 条,且过滤掉 role 不对的
+        cleaned = [h for h in history if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content")]
+        return cleaned[-limit:]
+    except Exception as e:
+        log.warning("加载 session 历史失败 uid=%s sid=%s: %s", uid[:8] if uid else "-", sid[:8] if sid else "-", e)
+        return []
+
+
+def _rag_answer(query: str, uid: str, sid: str = "") -> Dict:
     """调 RAG 检索 + 生成答案（qa_system.answer 内部已含检索）"""
     rag = _get_rag()
     if rag is None:
@@ -92,7 +123,9 @@ def _rag_answer(query: str, uid: str) -> Dict:
         # 注入用户偏好做个性化（追加到 query 末尾，LLM 会理解）
         prefs = memory.get_all_preferences(uid)
         pref_hint = f"（用户叫{prefs['name']}，回答时可适当称呼）" if prefs.get("name") else ""
-        result = rag.qa_system.answer(f"{query}{pref_hint}")
+        # 加载当前 session 的多轮历史(2026-09-24)
+        history = _load_session_history(uid, sid) if sid else []
+        result = rag.qa_system.answer(f"{query}{pref_hint}", history=history)
         return {
             "answer": result.get("answer", "（无回复）"),
             "sources": result.get("sources", []),
@@ -102,8 +135,8 @@ def _rag_answer(query: str, uid: str) -> Dict:
         return {"answer": f"⚠️ 检索出了点问题：{e}", "sources": []}
 
 
-def _rag_answer_stream(query: str, uid: str):
-    """RAG 流式生成(2026-09-23):逐 token yield,前端边收边渲染
+def _rag_answer_stream(query: str, uid: str, sid: str = ""):
+    """RAG 流式生成(2026-09-23,2026-09-24 接 history):逐 token yield,前端边收边渲染
 
     Yields:
         str: 增量文本片段(LLM token);末尾会 yield "SOURCES_JSON:..." 一行
@@ -118,7 +151,9 @@ def _rag_answer_stream(query: str, uid: str):
             return
         prefs = memory.get_all_preferences(uid)
         pref_hint = f"（用户叫{prefs['name']}，回答时可适当称呼）" if prefs.get("name") else ""
-        for chunk in rag.qa_system.answer_stream(f"{query}{pref_hint}"):
+        # 加载当前 session 的多轮历史(2026-09-24)
+        history = _load_session_history(uid, sid) if sid else []
+        for chunk in rag.qa_system.answer_stream(f"{query}{pref_hint}", history=history):
             yield chunk
     except Exception as e:
         log.exception("RAG 流式回答异常")

@@ -694,6 +694,97 @@ button { font-family: inherit; cursor: pointer; }
   .wxu-page-title { font-size: 24px; }
 }
 
+/* ---------- Session Toolbar(2026-09-24 加:多对话 + 改名) ---------- */
+.wxu-chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 14px;
+  padding: 10px 14px;
+  background: var(--paper-2);
+  border: 1px solid var(--mist);
+  border-radius: 12px;
+  flex-wrap: wrap;
+}
+.wxu-chat-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.wxu-chat-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.wxu-session-title-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.wxu-session-title {
+  font-family: var(--font-display-zh);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: text;
+  border: 1px dashed transparent;
+  transition: border-color 0.15s, background 0.15s;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wxu-session-title:hover {
+  border-color: var(--mist);
+  background: var(--paper-card);
+}
+.wxu-session-title-input {
+  font-family: var(--font-display-zh);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--paper-card);
+  outline: none;
+  width: 200px;
+}
+.wxu-session-select {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--mist);
+  background: var(--paper-card);
+  cursor: pointer;
+  max-width: 200px;
+  outline: none;
+}
+.wxu-session-select:focus {
+  border-color: var(--accent);
+}
+.wxu-btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .wxu-chat-toolbar { flex-direction: column; align-items: stretch; }
+  .wxu-chat-toolbar-right { justify-content: space-between; }
+  .wxu-session-select { max-width: none; flex: 1; }
+}
+
 /* ---------- Login Page ---------- */
 .wxu-login-wrap {
   min-height: calc(100vh - var(--nav-h) - 80px);

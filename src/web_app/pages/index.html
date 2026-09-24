@@ -68,6 +68,22 @@
       <div style="font-size:13px;color:var(--ink-mute);margin-bottom:4px;">
         比如:<i style="color:var(--ink-faint)">"今天上啥?"</i> · <i style="color:var(--ink-faint)">"国家奖学金怎么申请?"</i> · <i style="color:var(--ink-faint)">"第二食堂夜宵有啥?"</i>
       </div>
+
+      <!-- Session 工具条(2026-09-24 加:多对话 + 改名) -->
+      <div class="wxu-chat-toolbar">
+        <div class="wxu-chat-toolbar-left">
+          <span class="wxu-session-title-label">当前:</span>
+          <span id="current-session-title" class="wxu-session-title" title="双击改名">新对话</span>
+          <input id="current-session-title-input" class="wxu-session-title-input" maxlength="32" style="display:none">
+        </div>
+        <div class="wxu-chat-toolbar-right">
+          <select id="session-list" class="wxu-session-select" title="切换历史对话">
+            <option value="">📚 历史对话…</option>
+          </select>
+          <button id="new-session-btn" class="wxu-btn-ghost wxu-btn-sm" title="新建对话">+ 新建</button>
+        </div>
+      </div>
+
       <div class="wxu-chat-history" id="chat-history">
         <div class="wxu-chat-empty">还没有对话,从上方输入问题开始 👆</div>
       </div>
@@ -168,10 +184,25 @@
 
 {% block extra_script %}
 <script>
+// ============ 多 Session + 多轮对话(2026-09-24 新增) ============
+// 后端 5 个 API:
+//   GET   /api/session/list     → 列出所有 session
+//   POST  /api/session/new      → 新建,设 wxu_sid cookie
+//   GET   /api/session/messages?sid=xxx → 加载某 session 历史
+//   POST  /api/session/rename   body:{sid,title} → 改 title
+//   POST  /api/session/switch   body:{sid}      → 切换当前 session
+
 const chatHistory = document.getElementById('chat-history');
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
+const sessionList = document.getElementById('session-list');
+const newSessionBtn = document.getElementById('new-session-btn');
+const titleEl = document.getElementById('current-session-title');
+const titleInput = document.getElementById('current-session-title-input');
 
+let currentSid = '';  // 当前会话 sid(cookie wxu_sid)
+
+// ---------- 工具 ----------
 function appendMsg(role, text) {
   const empty = chatHistory.querySelector('.wxu-chat-empty');
   if (empty) empty.remove();
@@ -182,6 +213,154 @@ function appendMsg(role, text) {
   chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
+function clearChat() {
+  chatHistory.innerHTML = '<div class="wxu-chat-empty">还没有对话,从上方输入问题开始 👆</div>';
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return '刚刚';
+  if (diffMin < 60) return diffMin + ' 分钟前';
+  if (diffMin < 1440) return Math.floor(diffMin / 60) + ' 小时前';
+  return Math.floor(diffMin / 1440) + ' 天前';
+}
+
+// ---------- Session 列表 ----------
+async function loadSessionList() {
+  try {
+    const r = await fetch('/api/session/list');
+    const data = await r.json();
+    const sessions = data.sessions || [];
+    // 保留 "历史对话…" option,追加其他
+    sessionList.innerHTML = '<option value="">📚 历史对话…</option>';
+    for (const s of sessions) {
+      const opt = document.createElement('option');
+      opt.value = s.sid;
+      opt.textContent = `${s.title || '新对话'} · ${fmtTime(s.last_active_at)}`;
+      if (s.sid === currentSid) opt.selected = true;
+      sessionList.appendChild(opt);
+    }
+    return sessions;
+  } catch (e) {
+    console.warn('加载 session 列表失败', e);
+    return [];
+  }
+}
+
+// ---------- 加载某 session 的历史 ----------
+async function loadSessionMessages(sid) {
+  try {
+    const r = await fetch(`/api/session/messages?sid=${encodeURIComponent(sid)}`);
+    const data = await r.json();
+    const messages = data.messages || [];
+    clearChat();
+    if (messages.length === 0) {
+      chatHistory.innerHTML = '<div class="wxu-chat-empty">这条对话还没有消息,从下方输入开始 👇</div>';
+      return;
+    }
+    for (const m of messages) {
+      appendMsg(m.role, m.content);
+    }
+  } catch (e) {
+    console.warn('加载消息失败', e);
+  }
+}
+
+// ---------- 切换 session ----------
+async function switchSession(sid) {
+  if (!sid || sid === currentSid) return;
+  try {
+    const r = await fetch('/api/session/switch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sid: sid}),
+    });
+    if (!r.ok) throw new Error('切换失败');
+    currentSid = sid;
+    await loadSessionMessages(sid);
+    await loadSessionList();  // 刷新下拉(让 select 显示当前选中的)
+    updateTitleDisplay();
+  } catch (e) {
+    console.warn('切换 session 失败', e);
+    alert('切换对话失败:' + e.message);
+  }
+}
+
+// ---------- 新建 session ----------
+async function createNewSession() {
+  try {
+    const r = await fetch('/api/session/new', {method: 'POST'});
+    if (!r.ok) throw new Error('新建失败');
+    const data = await r.json();
+    currentSid = data.sid;
+    clearChat();
+    titleEl.textContent = data.title || '新对话';
+    await loadSessionList();
+  } catch (e) {
+    console.warn('新建 session 失败', e);
+    alert('新建对话失败:' + e.message);
+  }
+}
+
+// ---------- 改名(双击 title → input → 回车保存) ----------
+function updateTitleDisplay() {
+  // 从 sessionList 找出当前 sid 对应的 title
+  const opt = Array.from(sessionList.options).find(o => o.value === currentSid);
+  titleEl.textContent = opt ? opt.textContent.split(' · ')[0] : '新对话';
+}
+
+titleEl.addEventListener('dblclick', () => {
+  titleInput.value = titleEl.textContent;
+  titleEl.style.display = 'none';
+  titleInput.style.display = 'inline-block';
+  titleInput.focus();
+  titleInput.select();
+});
+
+titleInput.addEventListener('blur', saveTitle);
+titleInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); saveTitle(); }
+  if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+});
+
+async function saveTitle() {
+  const newTitle = titleInput.value.trim();
+  titleInput.style.display = 'none';
+  titleEl.style.display = '';
+  if (!newTitle || !currentSid) return;
+  if (newTitle === titleEl.textContent) return;
+  try {
+    const r = await fetch('/api/session/rename', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sid: currentSid, title: newTitle}),
+    });
+    if (!r.ok) throw new Error('改名失败');
+    titleEl.textContent = newTitle;
+    await loadSessionList();
+  } catch (e) {
+    console.warn('改名失败', e);
+  }
+}
+
+function cancelEdit() {
+  titleInput.style.display = 'none';
+  titleEl.style.display = '';
+}
+
+// ---------- 事件绑定 ----------
+sessionList.addEventListener('change', () => {
+  const sid = sessionList.value;
+  if (sid) switchSession(sid);
+});
+
+newSessionBtn.addEventListener('click', createNewSession);
+
+// ---------- 发问(流式) ----------
 async function sendQuery() {
   const q = chatInput.value.trim();
   if (!q) return;
@@ -215,10 +394,19 @@ async function sendQuery() {
           try {
             const obj = JSON.parse(data);
             if (obj.text) aiMsg.textContent += obj.text;
+            if (obj.sid && obj.sid !== currentSid) {
+              // 后端给了 sid(说明新建了 session),同步本地
+              currentSid = obj.sid;
+              await loadSessionList();
+              updateTitleDisplay();
+            }
           } catch (e) {}
         }
       }
     }
+    // 对话完成后刷新 session 列表(msg_count 变化)
+    await loadSessionList();
+    updateTitleDisplay();
   } catch (e) {
     aiMsg.textContent = '⚠️ ' + e.message;
   } finally {
@@ -231,5 +419,34 @@ chatSend.addEventListener('click', sendQuery);
 chatInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') sendQuery();
 });
+
+// ---------- 初始化:读 cookie 里的 sid,加载历史 ----------
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+// 用一次 /api/chat 触发 _ensure_sid(后端会确保 sid 存在 + 设 cookie),然后再读 cookie
+async function init() {
+  // 先确保后端有 sid(后端 _ensure_sid 会写 cookie)
+  // 技巧:访问任意需要 uid 的端点都会触发
+  try {
+    await fetch('/api/session/list');  // 这步会让 _ensure_uid 写 cookie wxu_uid
+  } catch (e) {}
+  // 等一拍让 cookie 落
+  await new Promise(r => setTimeout(r, 100));
+
+  currentSid = getCookie('wxu_sid');
+  await loadSessionList();
+  if (currentSid) {
+    await loadSessionMessages(currentSid);
+    updateTitleDisplay();
+  } else {
+    // 没有 sid:让第一次发问时自动创建
+    titleEl.textContent = '新对话';
+  }
+}
+
+init();
 </script>
 {% endblock %}

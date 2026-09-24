@@ -20,6 +20,7 @@ LLM 问答链：拼接 prompt + 检索片段，调用 LLM 生成答案
 
 import os
 import re
+import json
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -53,6 +54,48 @@ def clean_answer(text: str) -> str:
 
     return text.strip()
 
+
+def format_history_for_prompt(history, max_turns: int = 6) -> str:
+    """把多轮对话历史格式化成 prompt 片段（2026-09-24 加：LLM 真多轮）
+
+    输入格式：[{"role": "user"/"assistant", "content": "..."}, ...]
+    输出格式：
+        之前的对话历史(最近的对话):
+        用户: ...
+        助手: ...
+        用户: ...
+
+    Args:
+        history: 多轮历史 list,取最近 max_turns*2 条
+        max_turns: 最多取几轮(默认 6 轮,够覆盖指代/追问场景)
+
+    Returns:
+        str: 历史区段文字,空 list 时返回空字符串
+    """
+    if not history:
+        return ""
+    cleaned = []
+    for h in history:
+        if not isinstance(h, dict):
+            continue
+        role = h.get("role")
+        content = h.get("content")
+        if role not in ("user", "assistant") or not content:
+            continue
+        content_str = str(content).strip()
+        if len(content_str) > 500:
+            content_str = content_str[:500] + "…"
+        cleaned.append((role, content_str))
+    if not cleaned:
+        return ""
+    cleaned = cleaned[-(max_turns * 2):]
+    lines = ["之前的对话历史(最近的对话):", ""]
+    role_zh = {"user": "用户", "assistant": "助手"}
+    for role, content in cleaned:
+        content_one_line = content.replace("\n", " ")
+        lines.append(f"{role_zh[role]}: {content_one_line}")
+    return "\n".join(lines)
+
 # 加载 .env 文件（处理 BOM 头）
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
 load_dotenv(env_path, encoding='utf-8-sig')
@@ -67,21 +110,24 @@ DEFAULT_TEMPLATE = """你是一个简洁的智能校园助手，专门帮助无�
 - 但**严禁**透露任何具体考题内容、参考答案、往年真题、空白试卷
 - 若用户追问具体考题/答案/往年卷子，礼貌拒绝并引导到课程大纲/教学日历/任课教师
 
-请根据以下参考文档内容回答用户的问题。先判断参考资料是否与用户问题真正相关，再选择回答方式。
+请根据以下参考文档内容 + 之前的对话历史，回答用户当前的问题。先判断参考资料/对话历史是否与用户问题真正相关，再选择回答方式。
 
 参考文档内容：
 {context}
 
+{history_section}
+
 用户问题：{question}
 
 要求：
-1. 先快速浏览参考资料：其中是否有任何 1-2 段直接针对用户问题的内容？
+1. 先快速浏览参考资料和对话历史：其中是否有任何 1-2 段直接针对用户问题的内容？
 2. 如果参考资料含相关关键词/日期/规则/数字（即使没有完全直接匹配的答案）：**必须从原文抽取信息作答**，例如"根据 X 通知第 Y 段..."即使参考里没写确切日期，也要引用原文里提到的相关线索（如"第 1 周开始上课"），不要建议查外部、不要绕开
 3. 如果参考资料与问题**完全无关**（如问数电电路却给体育课通知）：用你自己的常识简短回答，并注明"以上只是常识，建议以学校官方通知为准"
-4. 回答要简洁明了，3-5 句内讲清楚
-5. 如需列表，最多只列3-5条关键信息
-6. 回答中不要使用特殊符号（如####、****、——等装饰符号），只使用基本中文标点
-7. **禁止使用"不知道"、"无法"、"没法"等拒绝性词汇**；如需表达"资料没找到"，改用"参考资料中暂未列出"、"现有资料未直接说明"等中性表述
+4. **如果用户追问"刚才说的"、"上面那个"、"它"、"那个东西"等指代词**：必须参考对话历史理解指代对象，不要生硬地说"我不知道你指什么"
+5. 回答要简洁明了，3-5 句内讲清楚
+6. 如需列表，最多只列3-5条关键信息
+7. 回答中不要使用特殊符号（如####、****、——等装饰符号），只使用基本中文标点
+8. **禁止使用"不知道"、"无法"、"没法"等拒绝性词汇**；如需表达"资料没找到"，改用"参考资料中暂未列出"、"现有资料未直接说明"等中性表述
 
 回答："""
 
@@ -159,10 +205,10 @@ class LLMQASystem:
         # 初始化 LLM
         self.llm = self._init_llm(model_name)
 
-        # 创建主 Prompt（带 context，内置 fallback 语义：LLM 自主判断参考资料是否相关）
+        # 创建主 Prompt（带 context + history，多轮能理解指代；内置 fallback 语义：LLM 自主判断参考资料是否相关）
         self.prompt = PromptTemplate(
             template=self.template,
-            input_variables=["context", "question"]
+            input_variables=["context", "question", "history_section"]
         )
 
         # 创建 Fallback Prompt（完全无召回时使用，节省 token）
@@ -198,12 +244,14 @@ class LLMQASystem:
     def answer(
         self,
         question: str,
+        history: Optional[List[Dict]] = None,
         return_sources: bool = True
     ) -> Dict[str, Any]:
         """
         回答用户问题
         Args:
             question: 用户问题
+            history: 多轮对话历史(2026-09-24 加),格式 [{"role":"user/assistant","content":"..."}, ...]
             return_sources: 是否返回来源
         Returns:
             {"answer": 回答内容, "sources": 来源列表, "used_fallback": 是否使用 fallback}
@@ -219,16 +267,21 @@ class LLMQASystem:
             sources_raw = [(doc, None) for doc in docs]
             scores = [None] * len(docs)
 
-        # 2. 拼接 context
+        # 2. 拼接 context + history
         context = "\n\n".join([doc.page_content for doc in docs])
+        history_section = format_history_for_prompt(history)
 
         # 3. 调用 LLM（prompt 内置 fallback 语义：LLM 自主判断参考资料是否相关，无关就用常识回答）
         if not docs:
-            # 完全没有召回：直接走 fallback chain（节省 token）
+            # 完全没有召回：直接走 fallback chain（节省 token，不带 history）
             response = self.fallback_chain.invoke({"question": question}).content
             sources = []
         else:
-            response = self.chain.invoke({"context": context, "question": question}).content
+            response = self.chain.invoke({
+                "context": context,
+                "question": question,
+                "history_section": history_section,
+            }).content
             # 转换 sources 为 dict 列表
             sources = []
             for i, (doc, score) in enumerate(sources_raw):
@@ -255,9 +308,13 @@ class LLMQASystem:
 
         return result
 
-    def answer_stream(self, question: str):
+    def answer_stream(self, question: str, history: Optional[List[Dict]] = None):
         """
-        流式生成答案(2026-09-23 加):LLM 边推理边吐 token,前端边收边渲染
+        流式生成答案(2026-09-23 加,2026-09-24 加 history 多轮):LLM 边推理边吐 token,前端边收边渲染
+
+        Args:
+            question: 用户问题
+            history: 多轮对话历史(2026-09-24 加)
 
         Yields:
             str: 增量 token 文本
@@ -272,6 +329,7 @@ class LLMQASystem:
             scores = [None] * len(docs)
 
         context = "\n\n".join([doc.page_content for doc in docs])
+        history_section = format_history_for_prompt(history)
 
         # 2. 选 chain
         if not docs:
@@ -279,7 +337,11 @@ class LLMQASystem:
             invoke_kwargs = {"question": question}
         else:
             chain = self.chain
-            invoke_kwargs = {"context": context, "question": question}
+            invoke_kwargs = {
+                "context": context,
+                "question": question,
+                "history_section": history_section,
+            }
 
         # 3. 流式生成(LCEL: chain.stream() yield AIMessageChunk)
         for chunk in chain.stream(invoke_kwargs):
