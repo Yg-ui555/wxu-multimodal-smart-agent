@@ -16,7 +16,7 @@
 
 两种模式：
   --once   跑一次（手动测试 / Windows Task Scheduler）
-  (无参)  daemon 模式（APScheduler 每天 02:00 自动跑）
+  (无参)  daemon 模式（APScheduler 每天 18:00 自动跑）
 
 用法：
   python scripts/daily_crawl.py --once       # 跑一次
@@ -612,7 +612,7 @@ def run_crawl_once(state):
     return stats
 
 
-def run_daemon(schedule_time="02:00"):
+def run_daemon(schedule_time="18:00"):
     """daemon 模式：每天定时跑"""
     try:
         from apscheduler.schedulers.blocking import BlockingScheduler
@@ -629,8 +629,18 @@ def run_daemon(schedule_time="02:00"):
         except Exception as e:
             LOG.error(f"任务异常: {e}", exc_info=True)
 
-    # 每天 02:00 跑
-    scheduler.add_job(job, 'cron', hour=2, minute=0, id='daily_crawl')
+    # 解析 schedule_time (HH:MM) 给 cron 用（之前是硬编码 02:00,导致 --time 参数不生效,2026-09-24 修）
+    try:
+        hh, mm = schedule_time.split(":")
+        hh, mm = int(hh), int(mm)
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            raise ValueError
+    except ValueError:
+        LOG.error(f"schedule_time 格式错误: {schedule_time!r},应为 HH:MM,回退到 18:00")
+        hh, mm = 18, 0
+
+    # 按 schedule_time 定时跑
+    scheduler.add_job(job, 'cron', hour=hh, minute=mm, id='daily_crawl')
     LOG.info(f"daemon 启动：每天 {schedule_time} 自动抓取")
     LOG.info("首次启动立即跑一次...")
 
@@ -651,7 +661,7 @@ def run_daemon(schedule_time="02:00"):
 def main():
     parser = argparse.ArgumentParser(description="每日抓取无锡学院官网通知")
     parser.add_argument("--once", action="store_true", help="跑一次（默认 daemon 模式）")
-    parser.add_argument("--time", default="02:00", help="daemon 模式下每天的运行时间 (HH:MM)")
+    parser.add_argument("--time", default="18:00", help="daemon 模式下每天的运行时间 (HH:MM)")
     parser.add_argument("--reset", action="store_true", help="重置 state（强制全量抓取）")
     args = parser.parse_args()
 
