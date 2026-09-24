@@ -208,9 +208,33 @@ function appendMsg(role, text) {
   if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'wxu-chat-msg ' + role;
-  div.textContent = text;
+  // 2026-09-24 加:用户消息仍用 textContent(避免 XSS),AI 答案用 markdown 渲染
+  if (role === 'user') {
+    div.textContent = text;
+  } else {
+    renderMarkdown(div, text);
+  }
   chatHistory.appendChild(div);
   chatHistory.scrollTop = chatHistory.scrollHeight;
+  return div;
+}
+
+// 2026-09-24 加:markdown 渲染(marked + highlight.js 代码高亮)
+function renderMarkdown(container, text) {
+  try {
+    // marked 12.x 默认已经转义 HTML,安全
+    const html = marked.parse(text || '', {breaks: true, gfm: true});
+    container.innerHTML = html;
+    // 给所有 <pre><code> 调高亮(如果有 hljs)
+    if (window.hljs) {
+      container.querySelectorAll('pre code').forEach(block => {
+        try { hljs.highlightElement(block); } catch (e) {}
+      });
+    }
+  } catch (e) {
+    // 降级:纯文本
+    container.textContent = text;
+  }
 }
 
 function clearChat() {
@@ -373,6 +397,20 @@ async function sendQuery() {
   aiMsg.textContent = '…';
   chatHistory.appendChild(aiMsg);
 
+  // 2026-09-24 加:流式 markdown 累积 + 节流重渲染(rAF,避免每个 chunk 都重渲染)
+  let aiTextBuffer = '';
+  let pendingRender = false;
+  const flushRender = () => {
+    pendingRender = false;
+    renderMarkdown(aiMsg, aiTextBuffer);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+  };
+  const scheduleRender = () => {
+    if (pendingRender) return;
+    pendingRender = true;
+    requestAnimationFrame(flushRender);
+  };
+
   try {
     const resp = await fetch('/api/chat', {
       method: 'POST',
@@ -393,7 +431,10 @@ async function sendQuery() {
           if (data === '[DONE]') continue;
           try {
             const obj = JSON.parse(data);
-            if (obj.text) aiMsg.textContent += obj.text;
+            if (obj.text) {
+              aiTextBuffer += obj.text;
+              scheduleRender();  // 节流:60fps 一次重渲染
+            }
             if (obj.sid && obj.sid !== currentSid) {
               // 后端给了 sid(说明新建了 session),同步本地
               currentSid = obj.sid;
@@ -404,6 +445,8 @@ async function sendQuery() {
         }
       }
     }
+    // 流结束:最后强制重渲染一次(确保收尾完整)
+    flushRender();
     // 对话完成后刷新 session 列表(msg_count 变化)
     await loadSessionList();
     updateTitleDisplay();
