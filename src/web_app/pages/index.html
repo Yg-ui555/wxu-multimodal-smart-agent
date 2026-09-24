@@ -532,9 +532,21 @@ async function sendQuery() {
   lastQuery = q;  // 给"重新生成"用
 
   const aiMsg = document.createElement('div');
-  aiMsg.className = 'wxu-chat-msg ai';
-  aiMsg.textContent = '…';
+  aiMsg.className = 'wxu-chat-msg ai wxu-chat-thinking';
+  aiMsg.textContent = '💭 思考中';  // 2026-09-24:占位符给视觉反馈,告诉用户系统在工作中
   chatHistory.appendChild(aiMsg);
+
+  // 2026-09-24 UX:动画点点点(每 300ms 加一个,最多 5 个)
+  let dotsCount = 0;
+  let dotsCleared = false;
+  const dotsTimer = setInterval(() => {
+    if (dotsCleared) {
+      clearInterval(dotsTimer);
+      return;
+    }
+    dotsCount = (dotsCount + 1) % 6;
+    aiMsg.textContent = '💭 思考中' + '·'.repeat(dotsCount);
+  }, 300);
 
   // 2026-09-24 ②:AbortController 支持中途停止
   currentController = new AbortController();
@@ -542,8 +554,16 @@ async function sendQuery() {
   // 2026-09-24 加:流式 markdown 累积 + 节流重渲染(rAF,避免每个 chunk 都重渲染)
   let aiTextBuffer = '';
   let pendingRender = false;
+  let firstTokenArrived = false;  // 2026-09-24:首字是否到达,首次到达立刻 render(不等节流)
   const flushRender = () => {
     pendingRender = false;
+    // 第一次 render 时去掉"思考中"动画(变成正式答案样式)+ 停掉点点点计时器
+    if (!firstTokenArrived) {
+      dotsCleared = true;  // 2026-09-24:先停 dotsTimer 防覆盖
+      clearInterval(dotsTimer);
+      aiMsg.classList.remove('wxu-chat-thinking');
+      firstTokenArrived = true;
+    }
     renderMarkdown(aiMsg, aiTextBuffer);
     chatHistory.scrollTop = chatHistory.scrollHeight;
   };
@@ -581,7 +601,12 @@ async function sendQuery() {
               // 这里前端兜底,任何疑似 marker / JSON / sources 帧的 text 不渲染
               if (looksLikeMarkerOrJson(obj.text)) continue;
               aiTextBuffer += obj.text;
-              scheduleRender();  // 节流:60fps 一次重渲染
+              // 2026-09-24:首字立刻 render(不等 16ms 节流),后续维持节流
+              if (!firstTokenArrived) {
+                flushRender();  // 立刻显示,不延迟
+              } else {
+                scheduleRender();
+              }
             }
             if (obj.sources && Array.isArray(obj.sources) && obj.sources.length > 0) {
               // 2026-09-24:把 sources 存到 aiMsg,渲染时会转 [N] 为可 hover
