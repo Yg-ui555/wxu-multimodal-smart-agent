@@ -124,6 +124,85 @@ def _attach_uid_cookie(response, uid: str) -> None:
     )
 
 
+# ============================================================
+# Session（对话会话）管理 - 2026-09-24 新增
+# ============================================================
+# 设计：每个用户可有多个 session（对话会话），消息按 session 隔离
+# 存储：data/user_histories/<uid>/index.json（session 元数据）+ chat_<sid>.pkl（消息列表）
+# cookie：wxu_sid 记录当前会话,前后端共享
+# ============================================================
+def _ensure_sid(request: Request, uid: str) -> str:
+    """从 cookie 拿 sid,无效则新建一个并设 cookie
+
+    Returns:
+        str: 当前 session id(已确保合法存在)
+    """
+    from src.web_app import user_store
+    sid = request.cookies.get("wxu_sid", "").strip()
+    if sid and user_store.is_valid_session_id(sid):
+        # 验证该 sid 真的属于这个 uid(防止拿到别人的 sid)
+        sessions = user_store.list_sessions(uid)
+        if any(s == sid for s, _ in sessions):
+            return sid
+    # 没 cookie 或 sid 不属于该 uid,新建一个
+    new_sid = user_store.new_session(uid, title="新对话")
+    return new_sid or str(uuid.uuid4()).replace("-", "")[:16]
+
+
+def _attach_sid_cookie(response, sid: str) -> None:
+    """给 response 写 wxu_sid cookie(可选 - 365 天)"""
+    response.set_cookie(
+        key="wxu_sid", value=sid,
+        max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax", path="/",
+    )
+
+
+def _append_session_message(uid: str, sid: str, role: str, content: str):
+    """往某 session 的 recent_history 追加一条消息 + 同步更新 index.json 元数据
+
+    消息格式:[{"role":"user/assistant","content":"..."}, ...]
+    """
+    from src.web_app import user_store
+    state = user_store.load_state(uid, sid) or {}
+    history = state.get("recent_history", []) or []
+    # 兼容老 tuple 格式,统一转 list of dict
+    if history and isinstance(history[0], (list, tuple)):
+        converted = []
+        for pair in history:
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                q, a = pair[0], pair[1]
+                if q:
+                    converted.append({"role": "user", "content": str(q)})
+                if a:
+                    converted.append({"role": "assistant", "content": str(a)})
+        history = converted
+    elif not all(isinstance(h, dict) for h in history):
+        history = []
+
+    history.append({"role": role, "content": str(content)})
+    # 单 session 上限 200 条(防 disk 膨胀)
+    if len(history) > 200:
+        history = history[-200:]
+
+    state["recent_history"] = history
+    state["schema_version"] = state.get("schema_version", 1)
+    user_store.save_state(uid, sid, state)
+
+    # 同步更新 index.json:msg_count + last_active_at + preview + 自动标题(首条 user)
+    msg_count = len([h for h in history if h.get("role") == "user"])
+    preview = (str(content)[:30] + "…") if len(str(content)) > 30 else str(content)
+    user_store.touch(uid, sid)
+    user_store.update_meta(uid, sid, {"msg_count": msg_count, "preview": preview})
+
+    # 首条 user 消息时,自动用前 16 字做标题(用户可手动改)
+    meta_sessions = user_store.list_sessions(uid)
+    for s, meta in meta_sessions:
+        if s == sid and (not meta.get("title") or meta.get("title") == "新对话"):
+            auto_title = (str(content)[:16] + "…") if len(str(content)) > 16 else str(content)
+            user_store.update_meta(uid, sid, {"title": auto_title})
+            break
+
+
 def _get_recommend(uid: str, top: int = 4) -> List[str]:
     """基于对话历史给出推荐入口(改用 memory 模块)"""
     recent = memory.load_recent(uid, limit=20)
@@ -431,15 +510,122 @@ async def api_upload_status(task_id: str):
     return result
 
 
+# ============================================================
+# Session API（2026-09-24 新增：多对话会话管理）
+# ============================================================
+@app.get("/api/session/list")
+async def api_session_list(request: Request):
+    """列出当前用户的所有 session"""
+    from src.web_app import user_store
+    uid = request.cookies.get("wxu_uid", "").strip()
+    if not uid:
+        return {"sessions": []}
+    items = user_store.list_sessions(uid)
+    sessions = []
+    for sid, meta in items:
+        sessions.append({
+            "sid": sid,
+            "title": meta.get("title", "新对话"),
+            "last_active_at": meta.get("last_active_at", 0),
+            "created_at": meta.get("created_at", 0),
+            "msg_count": meta.get("msg_count", 0),
+            "preview": meta.get("preview", ""),
+        })
+    return {"sessions": sessions}
+
+
+@app.post("/api/session/new")
+async def api_session_new(request: Request):
+    """新建一个 session,设 wxu_sid cookie"""
+    from src.web_app import user_store
+    uid = request.cookies.get("wxu_uid", "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="No user cookie")
+    sid = user_store.new_session(uid, title="新对话")
+    if not sid:
+        raise HTTPException(status_code=500, detail="failed to create session")
+    response = JSONResponse({"sid": sid, "title": "新对话"})
+    _attach_sid_cookie(response, sid)
+    return response
+
+
+@app.get("/api/session/messages")
+async def api_session_messages(request: Request, sid: str = ""):
+    """加载某 session 的历史消息"""
+    from src.web_app import user_store
+    uid = request.cookies.get("wxu_uid", "").strip()
+    if not uid or not sid or not user_store.is_valid_session_id(sid):
+        return {"messages": []}
+    state = user_store.load_state(uid, sid) or {}
+    history = state.get("recent_history", []) or []
+    # 兼容 tuple 格式
+    if history and isinstance(history[0], (list, tuple)):
+        converted = []
+        for pair in history:
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                q, a = pair[0], pair[1]
+                if q:
+                    converted.append({"role": "user", "content": str(q)})
+                if a:
+                    converted.append({"role": "assistant", "content": str(a)})
+        history = converted
+    messages = [
+        {"role": h.get("role"), "content": h.get("content")}
+        for h in history if isinstance(h, dict) and h.get("role") in ("user", "assistant")
+    ]
+    return {"messages": messages}
+
+
+@app.post("/api/session/rename")
+async def api_session_rename(request: Request):
+    """重命名 session(title),body: {sid, title}"""
+    from src.web_app import user_store
+    body = await request.json()
+    uid = request.cookies.get("wxu_uid", "").strip()
+    sid = (body.get("sid") or "").strip()
+    title = (body.get("title") or "").strip()[:64]
+    if not uid or not sid or not user_store.is_valid_session_id(sid):
+        raise HTTPException(status_code=400, detail="invalid sid")
+    if not title:
+        raise HTTPException(status_code=400, detail="title required")
+    ok = user_store.update_meta(uid, sid, {"title": title})
+    if not ok:
+        raise HTTPException(status_code=500, detail="rename failed")
+    return {"ok": True, "title": title}
+
+
+@app.post("/api/session/switch")
+async def api_session_switch(request: Request):
+    """切换当前 session,设 wxu_sid cookie,body: {sid}"""
+    from src.web_app import user_store
+    body = await request.json()
+    uid = request.cookies.get("wxu_uid", "").strip()
+    sid = (body.get("sid") or "").strip()
+    if not uid or not sid or not user_store.is_valid_session_id(sid):
+        raise HTTPException(status_code=400, detail="invalid sid")
+    # 验证 sid 真的属于该 uid
+    if not any(s == sid for s, _ in user_store.list_sessions(uid)):
+        raise HTTPException(status_code=404, detail="session not found")
+    response = JSONResponse({"ok": True, "sid": sid})
+    _attach_sid_cookie(response, sid)
+    return response
+
+
 @app.post("/api/chat")
 async def api_chat(request: Request):
     """
-    AI Agent 对话入口(2026-09-23 改成真正的 SSE 流式)
+    AI Agent 对话入口(2026-09-23 改成真正的 SSE 流式,2026-09-24 加多 session + 多轮 history)
 
     之前的"流式"是假的:dispatcher.dispatch() 等 LLM 完整生成,然后切成 8 字小段 yield 出去。
     现在用 dispatcher._rag_answer_stream() 走 chain.stream(),LLM 边推理边吐 token,前端边收边渲染。
 
     sync generator 在 Starlette 里默认在线程池跑,不阻塞 event loop。
+
+    多轮支持(2026-09-24):
+      - 从 cookie wxu_sid 拿当前 session,没有则自动新建一个
+      - 消息按 sid 隔离(per-session history),存到 user_store chat_<sid>.pkl
+      - LLM prompt 注入该 session 的历史 messages,理解指代/追问
+      - 第一条 user 消息自动做标题(用户可手动改)
     """
     body = await request.json()
     query = body.get("query", "").strip()
@@ -447,8 +633,13 @@ async def api_chat(request: Request):
     if not query:
         raise HTTPException(status_code=400, detail="query required")
 
+    # 多 session:确保有当前 sid(cookie 无效就自动新建)
+    sid = _ensure_sid(request, uid)
+
+    # user 消息双写:memory SQLite(全局 intent 统计)+ per-session pickle(多轮历史)
     memory.save(uid, "user", query, intent="chat")
-    log.info("chat 收到 uid=%s query=%s", uid[:8], query[:50])
+    _append_session_message(uid, sid, "user", query)
+    log.info("chat 收到 uid=%s sid=%s query=%s", uid[:8], sid[:8], query[:50])
 
     # 1. 同步 intent 检测(快,不动 LLM)
     intent, _ = dispatcher.detect_intent(query)
@@ -461,36 +652,44 @@ async def api_chat(request: Request):
             result = dispatcher._format_schedule(uid, query)
             answer = result["answer"]
             yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
             memory.save(uid, "assistant", answer, intent=intent)
+            _append_session_message(uid, sid, "assistant", answer)
         elif intent == "schedule_upload":
             answer = "📤 上传课表请去「上传中心」页面,选 PDF 文件即可,我会自动解析存进你的课表。"
             yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
             memory.save(uid, "assistant", answer, intent=intent)
+            _append_session_message(uid, sid, "assistant", answer)
         elif intent == "image_ocr":
-            answer = "🖼️ 识别图片请去「上传中心」上传图片,我会用 OCR 提取文字 + 用视觉模型识别物体。"
+            answer = "🖼️ 看图直接去「上传中心」把图片传上来就行,我来帮你看里面的内容。"
             yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
             memory.save(uid, "assistant", answer, intent=intent)
+            _append_session_message(uid, sid, "assistant", answer)
         else:
-            # RAG 路径:真正流式
-            for chunk in dispatcher._rag_answer_stream(query, uid):
+            # RAG 路径:真正流式 + 喂当前 session 的多轮历史
+            for chunk in dispatcher._rag_answer_stream(query, uid, sid=sid):
                 if chunk.startswith("__SOURCES__:"):
                     sources_json = chunk[len("__SOURCES__:"):]
                     try:
                         sources = json.loads(sources_json)
                     except Exception:
                         sources = []
-                    yield f"data: {json.dumps({'sources': sources, 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'sources': sources, 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
                 else:
                     accumulated.append(chunk)
                     yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
-            memory.save(uid, "assistant", "".join(accumulated), intent=intent)
-            log.info("chat 流式完成 uid=%s intent=%s 答案长=%d", uid[:8], intent, sum(len(x) for x in accumulated))
+            assistant_text = "".join(accumulated)
+            memory.save(uid, "assistant", assistant_text, intent=intent)
+            _append_session_message(uid, sid, "assistant", assistant_text)
+            log.info("chat 流式完成 uid=%s sid=%s intent=%s 答案长=%d", uid[:8], sid[:8], intent, len(assistant_text))
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    response = StreamingResponse(event_stream(), media_type="text/event-stream")
+    # 把当前 sid 写回 cookie(首次会话/换 sid 时需要)
+    _attach_sid_cookie(response, sid)
+    return response
 
 
 @app.get("/api/recommend")
