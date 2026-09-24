@@ -231,10 +231,98 @@ function renderMarkdown(container, text) {
         try { hljs.highlightElement(block); } catch (e) {}
       });
     }
+    // 2026-09-24 加:把 [1] [2] [3] 这种引用标记转成可 hover 的 sup
+    decorateCitations(container, container._sources || []);
   } catch (e) {
     // 降级:纯文本
     container.textContent = text;
   }
+}
+
+// 2026-09-24 加:把 [N] 转成 sup 元素 + 绑定 hover 弹原文
+function decorateCitations(container, sources) {
+  if (!sources || sources.length === 0) return;
+  // 扫描所有文本节点里的 [N]
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  const toReplace = [];
+  let node;
+  while (node = walker.nextNode()) {
+    const t = node.nodeValue;
+    if (/\[\d+\]/.test(t)) {
+      toReplace.push(node);
+    }
+  }
+  for (const textNode of toReplace) {
+    const t = textNode.nodeValue;
+    const frag = document.createDocumentFragment();
+    let lastIdx = 0;
+    const re = /\[(\d+)\]/g;
+    let m;
+    while ((m = re.exec(t)) !== null) {
+      if (m.index > lastIdx) {
+        frag.appendChild(document.createTextNode(t.slice(lastIdx, m.index)));
+      }
+      const idx = parseInt(m[1]) - 1;
+      const src = sources[idx];
+      const sup = document.createElement('sup');
+      sup.className = 'wxu-cite';
+      sup.textContent = m[1];
+      if (src) {
+        sup.dataset.i = m[1];
+        sup.title = `来源:${src.source || '未知'} · 分数 ${src.score ?? '-'}`;  // tooltip 兜底
+        // 用 dataset 存完整内容供弹窗用
+        sup.dataset.content = src.content || '';
+        sup.dataset.source = src.source || '';
+      }
+      frag.appendChild(sup);
+      lastIdx = m.index + m[0].length;
+    }
+    if (lastIdx < t.length) {
+      frag.appendChild(document.createTextNode(t.slice(lastIdx)));
+    }
+    textNode.replaceWith(frag);
+  }
+}
+
+// 2026-09-24 加:引用 hover 弹窗(全局,DOMContentLoaded 后生效)
+document.addEventListener('mouseover', (e) => {
+  const sup = e.target.closest('.wxu-cite');
+  if (!sup) return;
+  showCiteTooltip(sup);
+});
+document.addEventListener('mouseout', (e) => {
+  const sup = e.target.closest('.wxu-cite');
+  if (!sup) return;
+  hideCiteTooltip();
+});
+
+function showCiteTooltip(sup) {
+  hideCiteTooltip();
+  const tip = document.createElement('div');
+  tip.className = 'wxu-cite-tip';
+  tip.dataset.role = 'cite-tip';
+  const source = sup.dataset.source || '未知';
+  const content = sup.dataset.content || '';
+  // 截断过长 content(最多 300 字)
+  const snippet = content.length > 300 ? content.slice(0, 300) + '…' : content;
+  tip.innerHTML = `
+    <div class="wxu-cite-tip-source">📄 ${escapeHtml(source)}</div>
+    <div class="wxu-cite-tip-content">${escapeHtml(snippet)}</div>
+  `;
+  document.body.appendChild(tip);
+  // 定位在 sup 旁边
+  const rect = sup.getBoundingClientRect();
+  tip.style.top = (window.scrollY + rect.bottom + 6) + 'px';
+  tip.style.left = (window.scrollX + rect.left) + 'px';
+}
+
+function hideCiteTooltip() {
+  const old = document.querySelector('[data-role="cite-tip"]');
+  if (old) old.remove();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function clearChat() {
@@ -435,6 +523,10 @@ async function sendQuery() {
               aiTextBuffer += obj.text;
               scheduleRender();  // 节流:60fps 一次重渲染
             }
+            if (obj.sources && Array.isArray(obj.sources) && obj.sources.length > 0) {
+              // 2026-09-24:把 sources 存到 aiMsg,渲染时会转 [N] 为可 hover
+              aiMsg._sources = obj.sources;
+            }
             if (obj.sid && obj.sid !== currentSid) {
               // 后端给了 sid(说明新建了 session),同步本地
               currentSid = obj.sid;
@@ -445,7 +537,7 @@ async function sendQuery() {
         }
       }
     }
-    // 流结束:最后强制重渲染一次(确保收尾完整)
+    // 流结束:最后强制重渲染一次(确保收尾完整 + sources 标注)
     flushRender();
     // 对话完成后刷新 session 列表(msg_count 变化)
     await loadSessionList();
