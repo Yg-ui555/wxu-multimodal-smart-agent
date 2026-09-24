@@ -21,13 +21,21 @@
 
 import os
 import re
+import pickle
 import logging
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 
 log = logging.getLogger("retriever")
+
+# 项目根目录 + BM25 缓存目录(2026-09-23 加速冷启动)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+BM25_CACHE_DIR = PROJECT_ROOT / "data" / "cache"
+BM25_CACHE_PATH = BM25_CACHE_DIR / "bm25_tokens.pkl"
+VECTORSTORE_DIR = PROJECT_ROOT / "data" / "faiss_db_bge"
 
 try:
     import jieba
@@ -111,21 +119,67 @@ def _is_exam_doc(doc) -> bool:
 class BM25Index:
     """基于 jieba 分词 + rank_bm25 的中文关键词索引"""
 
-    def __init__(self, documents: List[Document]):
+    def __init__(self, documents: List[Document], cache_path: Optional[Path] = None):
         """
         Args:
             documents: 所有分块文档（用于构建 BM25 索引）
+            cache_path: pickle 缓存路径;None 用默认 data/cache/bm25_tokens.pkl
         """
+        if cache_path is None:
+            cache_path = BM25_CACHE_PATH
+
         self.documents = documents
         self.corpus = []
+
+        # 检查缓存是否有效(比向量库新)
+        cache_valid = False
+        if cache_path.exists() and VECTORSTORE_DIR.exists():
+            try:
+                cache_mtime = cache_path.stat().st_mtime
+                vs_mtime = max(
+                    f.stat().st_mtime for f in VECTORSTORE_DIR.iterdir() if f.is_file()
+                )
+                cache_valid = cache_mtime >= vs_mtime
+            except Exception:
+                cache_valid = False
+
+        if cache_valid:
+            try:
+                with open(cache_path, "rb") as f:
+                    self.corpus = pickle.load(f)
+                if len(self.corpus) == len(documents):
+                    if self.corpus:
+                        self.bm25 = BM25Okapi(self.corpus)
+                    else:
+                        self.bm25 = None
+                    log.info(f"BM25 索引从缓存加载: {len(self.corpus)} 个文档")
+                    return
+                log.warning(
+                    f"BM25 缓存长度不匹配 ({len(self.corpus)} vs {len(documents)}),重新构建"
+                )
+            except Exception as e:
+                log.warning(f"BM25 缓存加载失败: {e!r},重新构建")
+
+        # 重建:扫描所有文档 + jieba 分词(慢的部分)
+        self.corpus = []
         for doc in documents:
-            # 分词并过滤空词
             tokens = [t for t in jieba.cut(doc.page_content) if t.strip()]
             self.corpus.append(tokens)
         if self.corpus:
             self.bm25 = BM25Okapi(self.corpus)
         else:
             self.bm25 = None
+
+        # 保存 pickle 缓存(下次启动秒级加载)
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "wb") as f:
+                pickle.dump(self.corpus, f)
+            log.info(
+                f"BM25 索引构建并缓存: {len(documents)} 个文档 -> {cache_path}"
+            )
+        except Exception as e:
+            log.warning(f"BM25 缓存保存失败: {e!r}(不影响检索)")
 
     def search(self, query: str, k: int = 10) -> List[Tuple[Document, float]]:
         """

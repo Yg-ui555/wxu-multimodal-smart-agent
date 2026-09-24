@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, BackgroundTasks, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.concurrency import run_in_threadpool  # 2026-09-22 新增：把同步阻塞调用丢线程池
@@ -125,21 +125,21 @@ def _attach_uid_cookie(response, uid: str) -> None:
 
 
 def _get_recommend(uid: str, top: int = 4) -> List[str]:
-    """基于对话历史给出推荐入口（改用 memory 模块）"""
+    """基于对话历史给出推荐入口(改用 memory 模块)"""
     recent = memory.load_recent(uid, limit=20)
     if not recent:
-        return ["schedule", "scholarship", "campus", "upload"]
+        return ["schedule", "campus", "upload"]
     # 统计 user 消息的意图频次
     intent_count: Dict[str, int] = {}
     for h in recent:
         if h["role"] == "user" and h.get("intent"):
             intent_count[h["intent"]] = intent_count.get(h["intent"], 0) + 1
     if not intent_count:
-        return ["schedule", "scholarship", "campus", "upload"]
+        return ["schedule", "campus", "upload"]
     sorted_intents = sorted(intent_count.items(), key=lambda x: -x[1])[:top]
     # 意图 → 页面
     intent_to_page = {
-        "schedule": "schedule", "scholarship": "scholarship",
+        "schedule": "schedule",
         "kb": "campus", "news": "campus", "schedule_upload": "upload",
         "image_ocr": "upload", "general": "schedule",
     }
@@ -148,8 +148,8 @@ def _get_recommend(uid: str, top: int = 4) -> List[str]:
         p = intent_to_page.get(intent, "schedule")
         if p not in pages:
             pages.append(p)
-    # 补齐到 4 个
-    for p in ["schedule", "scholarship", "campus", "upload"]:
+    # 补齐到 3 个
+    for p in ["schedule", "campus", "upload"]:
         if p not in pages and len(pages) < top:
             pages.append(p)
     return pages[:top]
@@ -210,14 +210,10 @@ async def schedule(request: Request, week: int = 1):
     return response
 
 
-@app.get("/scholarship", response_class=HTMLResponse)
-async def scholarship(request: Request):
-    """奖学金页"""
-    uid, is_new = _ensure_uid(request)
-    response = templates.TemplateResponse(request, "scholarship.html", {})
-    if is_new:
-        _attach_uid_cookie(response, uid)
-    return response
+@app.get("/scholarship")
+async def scholarship():
+    """奖学金页已合并到首页对话,直接重定向到首页"""
+    return RedirectResponse(url="/", status_code=302)
 
 
 @app.get("/campus", response_class=HTMLResponse)
@@ -371,10 +367,12 @@ async def api_upload_status(task_id: str):
 @app.post("/api/chat")
 async def api_chat(request: Request):
     """
-    AI Agent 对话入口（SSE 流式响应，走 dispatcher 完整链路）
-    2026-09-22 修复：dispatcher.dispatch() 是同步阻塞（含 LLM HTTP 调用），
-    直接 await 会卡死整个 async event loop，所有请求排队。
-    解决：用 run_in_threadpool 丢到默认线程池，事件循环继续处理其他请求。
+    AI Agent 对话入口(2026-09-23 改成真正的 SSE 流式)
+
+    之前的"流式"是假的:dispatcher.dispatch() 等 LLM 完整生成,然后切成 8 字小段 yield 出去。
+    现在用 dispatcher._rag_answer_stream() 走 chain.stream(),LLM 边推理边吐 token,前端边收边渲染。
+
+    sync generator 在 Starlette 里默认在线程池跑,不阻塞 event loop。
     """
     body = await request.json()
     query = body.get("query", "").strip()
@@ -382,26 +380,47 @@ async def api_chat(request: Request):
     if not query:
         raise HTTPException(status_code=400, detail="query required")
 
-    # 1. 存用户问题到记忆
     memory.save(uid, "user", query, intent="chat")
     log.info("chat 收到 uid=%s query=%s", uid[:8], query[:50])
 
-    # 2. dispatcher 丢线程池跑（关键！不阻塞 event loop）
-    result = await run_in_threadpool(dispatcher.dispatch, query, uid)
-    answer = result.get("answer", "（无回复）")
-    intent = result.get("intent", "general")
-    sources = result.get("sources", [])
+    # 1. 同步 intent 检测(快,不动 LLM)
+    intent, _ = dispatcher.detect_intent(query)
+    dispatcher._extract_preferences(query, uid)
 
-    # 3. 存助手回复到记忆
-    memory.save(uid, "assistant", answer, intent=intent)
-    log.info("chat 完成 uid=%s intent=%s 答案长=%d", uid[:8], intent, len(answer))
-
-    async def event_stream():
-        chunk_size = 8
-        for i in range(0, len(answer), chunk_size):
-            chunk = answer[i:i + chunk_size]
-            yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'sources': sources, 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+    # 2. sync generator 给 StreamingResponse(在线程池里跑,不阻塞 event loop)
+    def event_stream():
+        accumulated = []
+        if intent == "schedule":
+            result = dispatcher._format_schedule(uid, query)
+            answer = result["answer"]
+            yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+            memory.save(uid, "assistant", answer, intent=intent)
+        elif intent == "schedule_upload":
+            answer = "📤 上传课表请去「上传中心」页面,选 PDF 文件即可,我会自动解析存进你的课表。"
+            yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+            memory.save(uid, "assistant", answer, intent=intent)
+        elif intent == "image_ocr":
+            answer = "🖼️ 识别图片请去「上传中心」上传图片,我会用 OCR 提取文字 + 用视觉模型识别物体。"
+            yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+            memory.save(uid, "assistant", answer, intent=intent)
+        else:
+            # RAG 路径:真正流式
+            for chunk in dispatcher._rag_answer_stream(query, uid):
+                if chunk.startswith("__SOURCES__:"):
+                    sources_json = chunk[len("__SOURCES__:"):]
+                    try:
+                        sources = json.loads(sources_json)
+                    except Exception:
+                        sources = []
+                    yield f"data: {json.dumps({'sources': sources, 'intent': intent, 'done': True}, ensure_ascii=False)}\n\n"
+                else:
+                    accumulated.append(chunk)
+                    yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+            memory.save(uid, "assistant", "".join(accumulated), intent=intent)
+            log.info("chat 流式完成 uid=%s intent=%s 答案长=%d", uid[:8], intent, sum(len(x) for x in accumulated))
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -430,10 +449,26 @@ if __name__ == "__main__":
     print("🚀 启动 FastAPI 多页版 · 端口 7862")
     print("   首页:     http://localhost:7862/")
     print("   课表:     http://localhost:7862/schedule")
-    print("   奖学金:   http://localhost:7862/scholarship")
     print("   校园生活: http://localhost:7862/campus")
     print("   上传中心: http://localhost:7862/upload")
     print("   健康检查: http://localhost:7862/health")
     print("=" * 60)
     log.info("FastAPI 启动，端口 7862")
+
+    # 后台预热 RAG 引擎(2026-09-23 加):首次对话不再等 30-60 秒冷启动
+    # 触发 dispatcher 单例懒加载:faiss + jieba + BM25 索引 + BGE-reranker 加载 + Ollama LLM 准备
+    def _warmup_rag_async():
+        def _run():
+            try:
+                log.info("后台预热 RAG 引擎开始(避免首次对话冷启动)...")
+                rag = dispatcher._get_rag()
+                if rag is not None:
+                    log.info("后台预热 RAG 引擎完成 ✓")
+                else:
+                    log.warning("后台预热 RAG 引擎返回 None")
+            except Exception as e:
+                log.warning(f"后台预热 RAG 异常(不影响服务): {e!r}")
+        threading.Thread(target=_run, daemon=True, name="rag-warmup").start()
+    _warmup_rag_async()
+
     uvicorn.run(app, host="0.0.0.0", port=7862, log_level="info")
