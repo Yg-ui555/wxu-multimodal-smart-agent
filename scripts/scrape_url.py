@@ -58,12 +58,27 @@ class TextExtractor(HTMLParser):
         return text.strip()
 
 
-def fetch_url(url, timeout=15, retries=3, backoff=1.5):
-    """下载 URL 内容(2026-09-20 加 retry + 状态码校验)"""
+def fetch_url(url, timeout=15, retries=3, backoff=1.5, inter_request_delay=0.3):
+    """下载 URL 内容(2026-09-20 加 retry,2026-09-24 加 anti-SSL-disconnect 防御)
+
+    Args:
+        url: 目标 URL
+        timeout: 单次超时(秒)
+        retries: 重试次数
+        backoff: 基础退避倍数(SSL 错误时 ×2)
+        inter_request_delay: 每次请求前的固定延迟(秒),防止高频触发 SSL 断开
+            2026-09-24 加:抓教务处历史页 (cwxu.edu.cn/info/1035/46xx.htm) 时,
+            无延迟并发请求 → 学校服务器 SSL 断开防御 (UNEXPECTED_EOF_WHILE_READING),
+            85 个 URL 失败。设 0.3s 后总抓取时间 +15s,SSL 失败率大幅降低。
+    """
     import time
+    import ssl
+    import socket
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 WXUBot/1.0'
     }
+    # 2026-09-24 加:每次请求前的全局延迟,避免高频触发 SSL 断开
+    time.sleep(inter_request_delay)
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers=headers)
@@ -85,7 +100,16 @@ def fetch_url(url, timeout=15, retries=3, backoff=1.5):
                     except UnicodeDecodeError:
                         continue
                 return body.decode('utf-8', errors='ignore')
+        except (ssl.SSLError, socket.timeout, ConnectionError, TimeoutError) as e:
+            # 2026-09-24 SSL/连接错误特判:backoff 加倍(避免雪崩),日志标 [SSL]
+            delay = (backoff ** attempt) * 2
+            if attempt == retries - 1:
+                print(f"  FAIL fetch_url [SSL/Conn {retries}x retry, backoff x2]: {url} - {e}")
+                return None
+            print(f"  retry {attempt + 1}/{retries - 1} [SSL backoff {delay:.1f}s]: {url} - {type(e).__name__}")
+            time.sleep(delay)
         except Exception as e:
+            # 其他错误:标准 backoff
             if attempt == retries - 1:
                 print(f"  FAIL fetch_url ({retries}x retry): {url} - {e}")
                 return None
