@@ -694,6 +694,82 @@ button { font-family: inherit; cursor: pointer; }
   .wxu-page-title { font-size: 24px; }
 }
 
+/* ---------- Login Page ---------- */
+.wxu-login-wrap {
+  min-height: calc(100vh - var(--nav-h) - 80px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+.wxu-login-card {
+  background: var(--paper-card);
+  border: 1px solid var(--mist);
+  border-radius: var(--radius-lg);
+  padding: 40px 36px;
+  box-shadow: var(--shadow-lg);
+  max-width: 420px;
+  width: 100%;
+}
+.wxu-login-title {
+  font-family: var(--font-display-zh);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-bottom: 8px;
+  text-align: center;
+}
+.wxu-login-sub {
+  font-size: 13px;
+  color: var(--ink-mute);
+  line-height: 1.7;
+  margin-bottom: 24px;
+  text-align: center;
+}
+.wxu-login-sub a {
+  color: var(--accent-deep);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent);
+}
+.wxu-login-sub a:hover { color: var(--accent); }
+.wxu-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wxu-login-input {
+  padding: 14px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--mist);
+  font-size: 15px;
+  outline: none;
+  background: var(--paper);
+  font-family: inherit;
+  color: var(--ink);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.wxu-login-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.wxu-login-submit {
+  width: 100%;
+  padding: 12px;
+  font-size: 15px;
+}
+.wxu-login-error {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #FFE4E6;
+  color: #BE123C;
+  font-size: 13px;
+  border: 1px solid var(--rose);
+  text-align: center;
+}
+
 /* ---------- Accessibility ---------- */
 @media (prefers-reduced-motion: reduce) {
   .wxu-ticker-track { animation: none; }

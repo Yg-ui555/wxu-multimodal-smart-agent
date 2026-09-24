@@ -19,7 +19,7 @@
       <a href="/campus" class="wxu-nav-link {% if request.url.path.startswith('/campus') %}active{% endif %}">校园生活</a>
       <a href="/upload" class="wxu-nav-link {% if request.url.path.startswith('/upload') %}active{% endif %}">上传中心</a>
     </div>
-    <div class="wxu-nav-user" id="user-id-badge">UID · 加载中…</div>
+    <a href="/login" class="wxu-nav-user" id="user-nick-badge">未登录</a>
   </nav>
 
   <div class="wxu-page">
@@ -27,14 +27,21 @@
   </div>
 
   <script>
-    // 显示用户 UID（前 8 位）
+    // 显示当前昵称（来自 wxu_nick cookie，已登录）或"未登录"（匿名）
+    // 点击跳 /logout 退出 / 跳 /login 登录
     (function() {
-      const m = document.cookie.match(/wxu_uid=([^;]+)/);
-      const el = document.getElementById('user-id-badge');
+      const m = document.cookie.match(/(?:^|;\s*)wxu_nick=([^;]+)/);
+      const el = document.getElementById('user-nick-badge');
       if (m) {
-        el.textContent = 'UID · ' + m[1].substring(0, 8);
+        let nick = decodeURIComponent(m[1]);
+        if (nick.length > 12) nick = nick.substring(0, 12) + '…';
+        el.textContent = nick;
+        el.href = '/logout';
+        el.title = '点击退出登录';
       } else {
-        el.textContent = 'UID · 未登录';
+        el.textContent = '未登录';
+        el.href = '/login';
+        el.title = '点击设置昵称';
       }
     })();
   </script>

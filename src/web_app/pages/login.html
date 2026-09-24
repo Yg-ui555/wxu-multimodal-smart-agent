@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}登录 · 无锡学院智能助手{% endblock %}
+
+{% block content %}
+<div class="wxu-login-wrap">
+  <div class="wxu-login-card">
+    <h1 class="wxu-login-title">起个昵称</h1>
+    <p class="wxu-login-sub">昵称只用于本地保存你的对话历史,不会上传或泄露给任何人。<br>也可以直接<a href="/">匿名进入</a>。</p>
+    <form method="post" action="/login" class="wxu-login-form">
+      <input
+        type="text"
+        name="nickname"
+        class="wxu-login-input"
+        placeholder="比如:小助手"
+        maxlength="32"
+        required
+        autofocus
+        autocomplete="off"
+      >
+      <button type="submit" class="wxu-btn wxu-login-submit">开始使用</button>
+    </form>
+    {% if error %}
+      <p class="wxu-login-error">{{ error }}</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
