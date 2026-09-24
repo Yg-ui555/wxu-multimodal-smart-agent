@@ -216,6 +216,73 @@ async def scholarship():
     return RedirectResponse(url="/", status_code=302)
 
 
+# ============================================================
+# 登录 / 退出（2026-09-24 新增）
+# ============================================================
+# 设计：
+#   - GET  /login  → 渲染昵称表单
+#   - POST /login  → 校验昵称合法性 → 设 wxu_uid(后端用,UUID,httponly) + wxu_nick(前端显示,URL 编码) → 跳 /
+#   - GET  /logout → 清两个 cookie → 跳 /login
+#
+# cookie 双轨：
+#   - wxu_uid : UUID,httponly=True,samesite=lax,365 天   ← 后端数据隔离用
+#   - wxu_nick: 昵称(URL 编码后),httponly=False,samesite=lax,30 天 ← 前端 JS decodeURIComponent 显示
+#
+# 昵称合法字符集：[A-Za-z0-9_\-\u4e00-\u9fff]（支持中文）,长度 1-32
+# ============================================================
+import re
+import urllib.parse
+_NICK_PATTERN = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]{1,32}$")
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """登录页:起个昵称（不填昵称直接访问主页也能用,走 anon fallback）"""
+    return templates.TemplateResponse(request, "login.html", {})
+
+
+@app.post("/login")
+async def login_submit(request: Request, nickname: str = Form(...)):
+    """提交昵称:校验合法性 → 写 cookie → 跳首页"""
+    nick = (nickname or "").strip()
+    if not _NICK_PATTERN.match(nick):
+        # 重新渲染登录页,带错误提示
+        return templates.TemplateResponse(
+            request, "login.html",
+            {"error": "昵称只能包含中英文/数字/下划线/短横线,长度 1-32 字符"},
+            status_code=400,
+        )
+
+    # 保留或生成 UUID uid（后端数据隔离用）
+    existing_uid = request.cookies.get("wxu_uid", "").strip()
+    if not existing_uid or len(existing_uid) > 128:
+        existing_uid = str(uuid.uuid4())
+
+    # 中文昵称需要 URL encode 后再放进 Set-Cookie（cookie 标准只支持 latin-1）
+    nick_encoded = urllib.parse.quote(nick, safe="")
+
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        key="wxu_uid", value=existing_uid,
+        max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax", path="/",
+    )
+    response.set_cookie(
+        key="wxu_nick", value=nick_encoded,
+        max_age=60 * 60 * 24 * 30, httponly=False, samesite="lax", path="/",
+    )
+    log.info("用户登录 nick=%s uid=%s", nick[:8], existing_uid[:8])
+    return response
+
+
+@app.get("/logout")
+async def logout():
+    """退出登录:清两个 cookie,跳登录页"""
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("wxu_uid", path="/")
+    response.delete_cookie("wxu_nick", path="/")
+    return response
+
+
 @app.get("/campus", response_class=HTMLResponse)
 async def campus(request: Request):
     """校园生活页"""
