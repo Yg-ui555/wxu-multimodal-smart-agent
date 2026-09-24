@@ -681,8 +681,8 @@ async def api_chat(request: Request):
         else:
             # RAG 路径:真正流式 + 喂当前 session 的多轮历史
             for chunk in dispatcher._rag_answer_stream(query, uid, sid=sid):
-                if chunk.startswith("__SOURCES__:"):
-                    sources_json = chunk[len("__SOURCES__:"):]
+                if chunk.startswith("<<WXU_DOCS_b3f9a2e1>>:"):
+                    sources_json = chunk[len("<<WXU_DOCS_b3f9a2e1>>:"):]
                     try:
                         sources = json.loads(sources_json)
                     except Exception:

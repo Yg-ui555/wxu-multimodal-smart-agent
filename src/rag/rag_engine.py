@@ -51,14 +51,17 @@ class RAGEngine:
             top_k=4,
             score_threshold=0.0,
             use_bm25=True,
-            use_reranker=True,
-            reranker_model="BAAI/bge-reranker-v2-m3",  # 首次启动会下载 ~2.27 GB
-            vector_top_k=8,    # 两路各召回 8，RRF 融合后 reranker 精排 8 → top4
+            # 2026-09-24 性能优化:CPU 跑 bge-reranker 慢(20s/问),关掉
+            # 代价:检索精度降 5-10%,但 29k chunks + RRF 融合已经够用
+            use_reranker=False,
+            reranker_model=None,
+            vector_top_k=8,
             bm25_top_k=8,
-            use_hyde=False,    # 先关闭，等 qa_system 建好再开
+            # 2026-09-24 性能优化:关 HyDE(每问多调一次 LLM,+5-10s,边际收益小)
+            use_hyde=False,
             hyde_llm=None,
         )
-        log.info("混合检索器创建成功（BM25 + 向量 + RRF + BGE-reranker）")
+        log.info("混合检索器创建成功（BM25 + 向量 + RRF,已关 reranker/HyDE 提速）")
 
         try:
             self.qa_system = create_qa_system(self.retriever)
@@ -67,11 +70,8 @@ class RAGEngine:
             log.error(f"LLM 初始化失败: {e}")
             return False
 
-        # 现在 qa_system 已建好，注入 hyde_llm
-        # HyDE（Hypothetical Document Embedding）= 让 LLM 先写"假设答案"再去搜，提升 recall@4
-        self.retriever.use_hyde = True
-        self.retriever.hyde_llm = self.qa_system.llm
-        log.info("RAG 引擎初始化完成（HyDE 已注入）")
+        # 2026-09-24 不再注入 hyde_llm(已关 HyDE)
+        log.info("RAG 引擎初始化完成")
         return True
 
 
