@@ -694,6 +694,34 @@ button { font-family: inherit; cursor: pointer; }
   .wxu-page-title { font-size: 24px; }
 }
 
+/* ---------- 思考中动画(2026-09-24 UX 改进) ---------- */
+.wxu-chat-thinking {
+  color: var(--ink-mute);
+  font-style: italic;
+  font-size: 13px;
+  opacity: 0.85;
+  animation: wxu-thinking-pulse 1.4s ease-in-out infinite;
+}
+.wxu-chat-thinking::after {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  text-align: left;
+  animation: wxu-thinking-dots 1.2s steps(4, end) infinite;
+}
+@keyframes wxu-thinking-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.55; }
+}
+@keyframes wxu-thinking-dots {
+  0%   { content: ''; }
+  25%  { content: '·'; }
+  50%  { content: '··'; }
+  75%  { content: '···'; }
+  100% { content: '....'; }
+}
+/* 注:CSS ::after content 不能动态改变,这里用伪步骤动画的视觉近似 */
+
 /* ---------- Confidence 信度色块(2026-09-24 ③) ---------- */
 .wxu-confidence {
   position: absolute;
