@@ -2,46 +2,46 @@
 {% block title %}校园生活 · 无锡学院智能助手{% endblock %}
 
 {% block content %}
-<div class="wxu-page-title">🍜 校园生活</div>
-<div class="wxu-page-subtitle">食堂菜单 / 校园活动 / 周边玩乐</div>
+<div class="wxu-page-title">
+  <span>校园生活</span>
+  <span class="wxu-page-title-en">Campus</span>
+</div>
+<div class="wxu-page-subtitle">
+  食堂 / 活动 / 周边 —— 在这里问 AI,或者直接看下方
+</div>
 
 <div class="wxu-card">
-  <div class="wxu-card-title">💡 智能问答</div>
-  <div style="font-size:13px;color:#6b6580;">
-    直接问 AI Agent <a href="/" style="color:#8b5cf6;">→ 首页</a>：<i>"食堂今天有啥?"</i> / <i>"这周有啥活动?"</i>
+  <div class="wxu-card-eyebrow">地图 · 食堂分布</div>
+  <div class="wxu-card-title">去哪吃</div>
+  <div class="wxu-canteen-grid">
+    <div class="wxu-canteen">
+      <div class="wxu-canteen-icon">🍜</div>
+      <div class="wxu-canteen-name">第一食堂</div>
+      <div class="wxu-canteen-hint">靠近教学楼 · 早午晚餐 · 性价比高</div>
+    </div>
+    <div class="wxu-canteen">
+      <div class="wxu-canteen-icon">🍱</div>
+      <div class="wxu-canteen-name">第二食堂</div>
+      <div class="wxu-canteen-hint">靠近宿舍区 · 夜宵档 · 种类多</div>
+    </div>
+    <div class="wxu-canteen">
+      <div class="wxu-canteen-icon">🥗</div>
+      <div class="wxu-canteen-name">清真食堂</div>
+      <div class="wxu-canteen-hint">独立区域 · 民族特色</div>
+    </div>
+    <div class="wxu-canteen">
+      <div class="wxu-canteen-icon">☕</div>
+      <div class="wxu-canteen-name">咖啡小栈</div>
+      <div class="wxu-canteen-hint">图书馆旁 · 适合自习</div>
+    </div>
   </div>
 </div>
 
 <div class="wxu-card">
-  <div class="wxu-card-title">🍽️ 食堂分布</div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
-    <div class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">🍜</div>
-      <div class="wxu-recommend-name">第一食堂</div>
-      <div style="font-size:12px;color:#6b6580;margin-top:4px;">靠近教学楼 · 早午晚餐 · 性价比高</div>
-    </div>
-    <div class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">🍱</div>
-      <div class="wxu-recommend-name">第二食堂</div>
-      <div style="font-size:12px;color:#6b6580;margin-top:4px;">靠近宿舍区 · 夜宵档 · 种类多</div>
-    </div>
-    <div class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">🥗</div>
-      <div class="wxu-recommend-name">清真食堂</div>
-      <div style="font-size:12px;color:#6b6580;margin-top:4px;">独立区域 · 民族特色</div>
-    </div>
-    <div class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">☕</div>
-      <div class="wxu-recommend-name">咖啡小栈</div>
-      <div style="font-size:12px;color:#6b6580;margin-top:4px;">图书馆旁 · 适合自习</div>
-    </div>
-  </div>
-</div>
-
-<div class="wxu-card">
-  <div class="wxu-card-title">📅 本周校园活动</div>
-  <div style="font-size:13px;color:#9d96b0;text-align:center;padding:20px 0;">
-    （接入 news_tab 后自动填充）
+  <div class="wxu-card-eyebrow">动态 · 本周活动</div>
+  <div class="wxu-card-title">校园活动</div>
+  <div style="font-size:14px;color:var(--ink-faint);text-align:center;padding:32px 0;">
+    接入 news_tab 后自动填充(已在 roadmap)
   </div>
 </div>
 {% endblock %}

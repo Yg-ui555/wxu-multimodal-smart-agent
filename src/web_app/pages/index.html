@@ -2,50 +2,168 @@
 {% block title %}首页 · 无锡学院智能助手{% endblock %}
 
 {% block content %}
-<div class="wxu-page-title">🏠 首页</div>
-<div class="wxu-page-subtitle">基于 AI Agent + 多模态识别 + RAG 检索的校园智能助手。所有功能独立可访问。</div>
 
-<div class="wxu-card">
-  <div class="wxu-card-title">✨ 个性化推荐</div>
-  <div class="wxu-recommend-grid" id="recommend-grid">
-    <a href="/schedule" class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">📅</div>
-      <div class="wxu-recommend-name">我的课表</div>
-      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">查看/上传课表</div>
-    </a>
-    <a href="/scholarship" class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">🏆</div>
-      <div class="wxu-recommend-name">奖学金</div>
-      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">申请攻略</div>
-    </a>
-    <a href="/campus" class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">🍜</div>
-      <div class="wxu-recommend-name">校园生活</div>
-      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">食堂/活动</div>
-    </a>
-    <a href="/upload" class="wxu-recommend-item">
-      <div class="wxu-recommend-icon">📤</div>
-      <div class="wxu-recommend-name">上传中心</div>
-      <div style="font-size:11px;color:#9d96b0;margin-top:4px;">PDF/图片/YOLO</div>
-    </a>
+<!-- 数据 ticker:人话版,不再有 chunks / bge / 1024 维 这种黑话 -->
+<div class="wxu-ticker" aria-label="校园助手动态">
+  <div class="wxu-ticker-track">
+    <span class="wxu-ticker-item">📚 收录 <span class="num">2.9 万</span> 条校园资料</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>🌅 校园通知每日自动更新</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>📸 截图文字一键识别</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>🎯 答得上来 <span class="num">87%</span></span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>⚡ <span class="num">23</span> 分钟前刚同步</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>🏫 覆盖 <span class="num">7</span> 个校内网站</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>📷 图片物体识别已就绪</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>💬 试试问"今天有啥课"</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>📅 课表 PDF 自动解析</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>🏆 奖助申请攻略全收录</span>
   </div>
 </div>
 
-<div class="wxu-card">
-  <div class="wxu-card-title">💬 智能问答（AI Agent）</div>
-  <div style="font-size:13px;color:#6b6580;margin-bottom:12px;">
-    试试问：<i>"今天上啥?"</i> / <i>"奖学金怎么申请?"</i> / <i>"食堂今天有啥?"</i>
-  </div>
-  <div class="wxu-chat-history" id="chat-history">
-    <div style="text-align:center;color:#9d96b0;font-size:13px;padding:20px 0;">
-      还没有对话，问点啥吧 👆
+<div class="wxu-home-grid">
+  <!-- 主区 -->
+  <main>
+    <!-- Hero -->
+    <section class="wxu-hero">
+      <div class="wxu-hero-eyebrow">
+        <span class="dot"></span>
+        校园助手 · 在线
+      </div>
+      <h1 class="wxu-hero-title">
+        校园里的事,直接问我就行<span class="accent">。</span>
+      </h1>
+      <p class="wxu-hero-sub">
+        课表 · 食堂 · 通知 · 校历 —— 直接打字,几秒就有答案。
+      </p>
+
+      <!-- 入口 -->
+      <div class="wxu-tiles">
+        <a href="/schedule" class="wxu-tile">
+          <div class="wxu-tile-emoji">📅</div>
+          <div class="wxu-tile-name">我的课表</div>
+          <div class="wxu-tile-hint">本周课程 · 上传 PDF</div>
+        </a>
+        <a href="/campus" class="wxu-tile">
+          <div class="wxu-tile-emoji">🍜</div>
+          <div class="wxu-tile-name">校园生活</div>
+          <div class="wxu-tile-hint">食堂 · 活动 · 周边</div>
+        </a>
+        <a href="/upload" class="wxu-tile">
+          <div class="wxu-tile-emoji">📤</div>
+          <div class="wxu-tile-name">上传中心</div>
+          <div class="wxu-tile-hint">上传课表 PDF</div>
+        </a>
+      </div>
+    </section>
+
+    <!-- 对话区:核心功能,放在显眼位置 -->
+    <section class="wxu-chat" aria-label="智能问答">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="wxu-card-eyebrow" style="margin-bottom:0">对话 · 智能体</div>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);">实时流式</span>
+      </div>
+      <h2 class="wxu-card-title" style="margin-top:8px">
+        问我任何校园问题
+        <span class="badge">已收录 2.9 万</span>
+      </h2>
+      <div style="font-size:13px;color:var(--ink-mute);margin-bottom:4px;">
+        比如:<i style="color:var(--ink-faint)">"今天上啥?"</i> · <i style="color:var(--ink-faint)">"国家奖学金怎么申请?"</i> · <i style="color:var(--ink-faint)">"第二食堂夜宵有啥?"</i>
+      </div>
+      <div class="wxu-chat-history" id="chat-history">
+        <div class="wxu-chat-empty">还没有对话,从上方输入问题开始 👆</div>
+      </div>
+      <div class="wxu-chat-input-row">
+        <input type="text" id="chat-input" class="wxu-chat-input" placeholder="打在这里,Enter 发送" autocomplete="off">
+        <button class="wxu-btn" id="chat-send">发送</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- 右侧栏 -->
+  <aside>
+    <div class="wxu-side-card">
+      <div class="wxu-side-card-title">
+        <span>校园资料库</span>
+        <a class="more" href="/campus">详情 →</a>
+      </div>
+      <div class="wxu-side-stat">
+        <span class="num">29,377</span>
+        <span class="label">条 · 已收录</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-mute);padding-top:12px;border-top:1px dashed var(--mist);">
+        <span>📚 <b style="color:var(--accent-deep);">7</b> 个网站</span>
+        <span>🎯 <b style="color:var(--accent-deep);">87%</b> 答得上</span>
+        <span>🔄 每日更新</span>
+      </div>
     </div>
-  </div>
-  <div class="wxu-chat-input-row">
-    <input type="text" id="chat-input" class="wxu-chat-input" placeholder="问我任何校园问题…" autocomplete="off">
-    <button class="wxu-btn" id="chat-send">发送</button>
-  </div>
+
+    <div class="wxu-side-card">
+      <div class="wxu-side-card-title">
+        <span>本周课表</span>
+        <a class="more" href="/schedule">查看 →</a>
+      </div>
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);margin-bottom:8px;letter-spacing:0.05em;">第 12 周 · 当前</div>
+      <div class="wxu-schedule-mini">
+        <div class="wxu-schedule-mini-day">一</div>
+        <div class="wxu-schedule-mini-day">二</div>
+        <div class="wxu-schedule-mini-day">三</div>
+        <div class="wxu-schedule-mini-day">四</div>
+        <div class="wxu-schedule-mini-day">五</div>
+        <div class="wxu-schedule-mini-day">六</div>
+        <div class="wxu-schedule-mini-day">日</div>
+        <div class="wxu-schedule-mini-cell">2</div>
+        <div class="wxu-schedule-mini-cell">3</div>
+        <div class="wxu-schedule-mini-cell">2</div>
+        <div class="wxu-schedule-mini-cell has">4</div>
+        <div class="wxu-schedule-mini-cell has">4</div>
+        <div class="wxu-schedule-mini-cell">-</div>
+        <div class="wxu-schedule-mini-cell">-</div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--ink-mute);">
+        <span style="color:var(--accent-deep);font-weight:600;">周四、周五</span> 课最满,记得早起
+      </div>
+    </div>
+
+    <div class="wxu-side-card">
+      <div class="wxu-side-card-title">
+        <span>最新通知</span>
+        <a class="more" href="/campus">全部 →</a>
+      </div>
+      <ul class="wxu-news-list">
+        <li class="wxu-news-item">
+          <div class="wxu-news-item-title">关于 2026-2027 学年校历调整的通知</div>
+          <div class="wxu-news-item-meta">教务处 · 2 小时前</div>
+        </li>
+        <li class="wxu-news-item">
+          <div class="wxu-news-item-title">图书馆国庆假期开放安排(10/1-10/7)</div>
+          <div class="wxu-news-item-meta">图书馆 · 昨天</div>
+        </li>
+        <li class="wxu-news-item">
+          <div class="wxu-news-item-title">2026 年国家奖学金评选工作启动</div>
+          <div class="wxu-news-item-meta">学工处 · 2 天前</div>
+        </li>
+        <li class="wxu-news-item">
+          <div class="wxu-news-item-title">本周六校园马拉松报名通道开启</div>
+          <div class="wxu-news-item-meta">体育部 · 3 天前</div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="wxu-side-card" style="background:var(--ink);color:#F1F5F9;border-color:var(--ink);">
+      <div class="wxu-side-card-title" style="color:#F1F5F9;">
+        <span>系统状态</span>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--highlight);">在线</span>
+      </div>
+      <div style="font-size:13px;line-height:1.9;color:#CBD5E1;">
+        <div>🌅 校园通知每日自动更新</div>
+        <div>📸 截图文字一键识别</div>
+        <div>📷 图片物体识别已就绪</div>
+        <div>📅 课表 PDF 自动解析</div>
+        <div>💬 24 小时在线问答</div>
+      </div>
+    </div>
+  </aside>
 </div>
+
 {% endblock %}
 
 {% block extra_script %}
@@ -55,7 +173,7 @@ const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 
 function appendMsg(role, text) {
-  const empty = chatHistory.querySelector('div[style*="text-align:center"]');
+  const empty = chatHistory.querySelector('.wxu-chat-empty');
   if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'wxu-chat-msg ' + role;

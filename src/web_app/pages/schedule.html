@@ -2,26 +2,30 @@
 {% block title %}我的课表 · 无锡学院智能助手{% endblock %}
 
 {% block content %}
-<div class="wxu-page-title">📅 我的课表</div>
+<div class="wxu-page-title">
+  <span>我的课表</span>
+  <span class="wxu-page-title-en">Schedule</span>
+</div>
 <div class="wxu-page-subtitle">
   {% if course_count > 0 %}
-    已解析 <b style="color:#8b5cf6;">{{ course_count }}</b> 节课 · 当前第 <b>{{ current_week }}</b> 周
+    已解析 <b style="color:var(--accent-deep);">{{ course_count }}</b> 节课 · 当前第 <b>{{ current_week }}</b> 周
   {% else %}
-    <b>暂无课表</b>。请前往 <a href="/upload" style="color:#8b5cf6;">上传中心</a> 上传 PDF。
+    <b>暂无课表</b>。请前往 <a href="/upload">上传中心</a> 上传 PDF。
   {% endif %}
 </div>
 
 {% if course_count > 0 %}
 <div class="wxu-card">
-  <div class="wxu-card-title">周次切换</div>
+  <div class="wxu-card-eyebrow">切换 · 学期周次</div>
+  <div class="wxu-card-title" style="margin-bottom:14px;">第 {{ current_week }} 周</div>
   <div class="wxu-week-selector">
     {% for w in range(1, 21) %}
-    <a href="/schedule?week={{ w }}" class="wxu-week-btn {% if w == current_week %}active{% endif %}">第 {{ w }} 周</a>
+    <a href="/schedule?week={{ w }}" class="wxu-week-btn {% if w == current_week %}active{% endif %}">W{{ w }}</a>
     {% endfor %}
   </div>
 </div>
 
-<div class="wxu-card" style="padding: 12px;">
+<div class="wxu-card" style="padding: 16px;">
   {{ week_view|safe }}
 </div>
 {% endif %}

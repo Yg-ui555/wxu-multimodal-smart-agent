@@ -2,63 +2,83 @@
 {% block title %}奖学金 · 无锡学院智能助手{% endblock %}
 
 {% block content %}
-<div class="wxu-page-title">🏆 奖学金申请攻略</div>
-<div class="wxu-page-subtitle">校一等奖学金 / 国家奖学金 / 国家励志奖学金 / 校友奖学金</div>
+<div class="wxu-page-title">
+  <span>奖学金申请攻略</span>
+  <span class="wxu-page-title-en">Scholarships</span>
+</div>
+<div class="wxu-page-subtitle">
+  校一等奖学金 / 国家奖学金 / 国家励志奖学金 / 校友奖学金
+</div>
 
 <div class="wxu-card">
-  <div class="wxu-card-title">💡 智能问答</div>
-  <div style="font-size:13px;color:#6b6580;margin-bottom:12px;">
-    直接问 AI Agent <a href="/" style="color:#8b5cf6;">→ 首页</a>：<i>"国家奖学金怎么申请?"</i> / <i>"校一等奖学金条件是啥?"</i>
+  <div class="wxu-card-eyebrow">建议</div>
+  <div class="wxu-card-title">直接问 AI 助手</div>
+  <div style="font-size:14px;color:var(--ink-mute);line-height:1.7;">
+    想了解细则 / 流程 / 材料清单,去 <a href="/">首页</a> 的对话区,比如问 <i style="color:var(--ink-faint)">"国家奖学金怎么申请?"</i> 或 <i style="color:var(--ink-faint)">"校一等奖学金条件是啥?"</i>
   </div>
 </div>
 
 <div class="wxu-card">
-  <div class="wxu-card-title">📋 常见奖学金一览</div>
-  <table style="width:100%;border-collapse:collapse;font-size:14px;">
+  <div class="wxu-card-eyebrow">一览 · 常见奖学金</div>
+  <div class="wxu-card-title">奖学金清单</div>
+  <table class="wxu-table">
     <thead>
-      <tr style="background:rgba(139,92,246,0.08);">
-        <th style="padding:10px;text-align:left;">名称</th>
-        <th style="padding:10px;text-align:left;">金额</th>
-        <th style="padding:10px;text-align:left;">基本条件</th>
+      <tr>
+        <th>名称</th>
+        <th>金额</th>
+        <th>基本条件</th>
       </tr>
     </thead>
     <tbody>
-      <tr style="border-bottom:1px solid rgba(139,92,246,0.1);">
-        <td style="padding:10px;"><b>国家奖学金</b></td>
-        <td style="padding:10px;">8000 元/年</td>
-        <td style="padding:10px;">年级前 5%、无挂科、综合测评优秀</td>
-      </tr>
-      <tr style="border-bottom:1px solid rgba(139,92,246,0.1);">
-        <td style="padding:10px;"><b>国家励志奖学金</b></td>
-        <td style="padding:10px;">5000 元/年</td>
-        <td style="padding:10px;">家庭经济困难 + 学习成绩优秀</td>
-      </tr>
-      <tr style="border-bottom:1px solid rgba(139,92,246,0.1);">
-        <td style="padding:10px;"><b>校一等奖学金</b></td>
-        <td style="padding:10px;">2000 元/年</td>
-        <td style="padding:10px;">年级前 10%、无挂科</td>
-      </tr>
-      <tr style="border-bottom:1px solid rgba(139,92,246,0.1);">
-        <td style="padding:10px;"><b>校二等奖学金</b></td>
-        <td style="padding:10px;">1200 元/年</td>
-        <td style="padding:10px;">年级前 30%、无挂科</td>
+      <tr>
+        <td><b>国家奖学金</b></td>
+        <td><span class="wxu-table-amount">¥8,000</span><span style="font-size:12px;color:var(--ink-faint);">/年</span></td>
+        <td>年级前 5% · 无挂科 · 综合测评优秀</td>
       </tr>
       <tr>
-        <td style="padding:10px;"><b>校友奖学金</b></td>
-        <td style="padding:10px;">500-2000 元</td>
-        <td style="padding:10px;">由校友捐赠设定，详见学院通知</td>
+        <td><b>国家励志奖学金</b></td>
+        <td><span class="wxu-table-amount">¥5,000</span><span style="font-size:12px;color:var(--ink-faint);">/年</span></td>
+        <td>家庭经济困难 + 学习成绩优秀</td>
+      </tr>
+      <tr>
+        <td><b>校一等奖学金</b></td>
+        <td><span class="wxu-table-amount">¥2,000</span><span style="font-size:12px;color:var(--ink-faint);">/年</span></td>
+        <td>年级前 10% · 无挂科</td>
+      </tr>
+      <tr>
+        <td><b>校二等奖学金</b></td>
+        <td><span class="wxu-table-amount">¥1,200</span><span style="font-size:12px;color:var(--ink-faint);">/年</span></td>
+        <td>年级前 30% · 无挂科</td>
+      </tr>
+      <tr>
+        <td><b>校友奖学金</b></td>
+        <td><span class="wxu-table-amount">¥500-2,000</span></td>
+        <td>由校友捐赠设定,详见学院通知</td>
       </tr>
     </tbody>
   </table>
 </div>
 
 <div class="wxu-card">
-  <div class="wxu-card-title">⏰ 申请时间线</div>
-  <ul style="margin-left:20px;line-height:1.8;font-size:14px;">
-    <li><b>9 月</b>：开学第一周，学院发布奖学金评审通知</li>
-    <li><b>10 月</b>：学生提交申请材料（含成绩单、获奖证书等）</li>
-    <li><b>10 月底</b>：班级评议 + 学院审核</li>
-    <li><b>11 月</b>：学校公示 + 资金发放</li>
+  <div class="wxu-card-eyebrow">节奏 · 申请时间线</div>
+  <div class="wxu-card-title">什么时候做什么</div>
+  <ul class="wxu-timeline">
+    <li>
+      <span class="wxu-timeline-month">09 月</span><br>
+      开学第一周,学院发布奖学金评审通知
+    </li>
+    <li>
+      <span class="wxu-timeline-month">10 月</span><br>
+      学生提交申请材料(成绩单、获奖证书等)
+    </li>
+    <li>
+      <span class="wxu-timeline-month">10 月底</span><br>
+      班级评议 + 学院审核
+    </li>
+    <li>
+      <span class="wxu-timeline-month">11 月</span><br>
+      学校公示 + 资金发放
+    </li>
   </ul>
 </div>
 {% endblock %}
