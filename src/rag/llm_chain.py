@@ -255,9 +255,57 @@ class LLMQASystem:
 
         return result
 
+    def answer_stream(self, question: str):
+        """
+        流式生成答案(2026-09-23 加):LLM 边推理边吐 token,前端边收边渲染
+
+        Yields:
+            str: 增量 token 文本
+        """
+        # 1. 检索(同步,因为 retrieve_with_scores 不支持 stream)
+        if hasattr(self.retriever, "retrieve_with_scores"):
+            docs, scores = self.retriever.retrieve_with_scores(question)
+            sources_raw = [(doc, float(score) if score is not None else 0.0) for doc, score in zip(docs, scores)]
+        else:
+            docs = self.retriever.retrieve(question)
+            sources_raw = [(doc, None) for doc in docs]
+            scores = [None] * len(docs)
+
+        context = "\n\n".join([doc.page_content for doc in docs])
+
+        # 2. 选 chain
+        if not docs:
+            chain = self.fallback_chain
+            invoke_kwargs = {"question": question}
+        else:
+            chain = self.chain
+            invoke_kwargs = {"context": context, "question": question}
+
+        # 3. 流式生成(LCEL: chain.stream() yield AIMessageChunk)
+        for chunk in chain.stream(invoke_kwargs):
+            text = getattr(chunk, "content", None)
+            if not text:
+                continue
+            text = clean_answer(text)
+            if text:
+                yield text
+
+        # 4. sources 作为最后一段(前端可选择性解析)
+        if docs:
+            sources = []
+            for i, (doc, score) in enumerate(sources_raw):
+                sources.append({
+                    "index": i + 1,
+                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                    "source": doc.metadata.get("source", "未知"),
+                    "page": doc.metadata.get("page", ""),
+                    "score": round(score, 4) if score is not None else None,
+                })
+            yield f"\n\n__SOURCES__:{json.dumps(sources, ensure_ascii=False)}"
+
     def answer_simple(self, question: str) -> str:
         """
-        简单回答（不带来源）
+        简单回答(不带来源)
         Args:
             question: 问题
         Returns:
