@@ -102,6 +102,29 @@ def _rag_answer(query: str, uid: str) -> Dict:
         return {"answer": f"⚠️ 检索出了点问题：{e}", "sources": []}
 
 
+def _rag_answer_stream(query: str, uid: str):
+    """RAG 流式生成(2026-09-23):逐 token yield,前端边收边渲染
+
+    Yields:
+        str: 增量文本片段(LLM token);末尾会 yield "SOURCES_JSON:..." 一行
+    """
+    rag = _get_rag()
+    if rag is None:
+        yield "📚 知识库正在加载中，请稍等几分钟再试，或者换个简单点的问题问我。"
+        return
+    try:
+        if rag.qa_system is None:
+            yield "⚠️ 问答系统未就绪"
+            return
+        prefs = memory.get_all_preferences(uid)
+        pref_hint = f"（用户叫{prefs['name']}，回答时可适当称呼）" if prefs.get("name") else ""
+        for chunk in rag.qa_system.answer_stream(f"{query}{pref_hint}"):
+            yield chunk
+    except Exception as e:
+        log.exception("RAG 流式回答异常")
+        yield f"⚠️ 检索出了点问题:{e}"
+
+
 # ============== 课表处理 ==============
 def _format_schedule(uid: str, query: str) -> Dict:
     """查课表并格式化成文字"""
