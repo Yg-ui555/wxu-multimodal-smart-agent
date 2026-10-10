@@ -8,7 +8,7 @@
 - 会议安排
 
 工作流：
-1. 每天凌晨 2 点（或首次启动时）抓取每个监控页面的列表
+1. 每天 18:00（默认）或首次启动时抓取每个监控页面的列表
 2. 跟 crawl_state.json 比对，只抓"新增"的详情
 3. 用 scrape_url.py 的工具提取正文 → 保存为 .txt → data/docs/学校通知/
 4. 调 scripts/add_new_docs.py 增量入向量库
@@ -36,7 +36,10 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
-PROJECT = r"D:\wxu\wxu-multimodal-smart-agent"
+# 2026-10-09 修复：原硬编码 PROJECT = r"D:\wxu\wxu-multimodal-smart-agent"
+# 改为相对脚本位置推导，跨机器可移植
+from pathlib import Path
+PROJECT = str(Path(__file__).resolve().parent.parent)
 os.chdir(PROJECT)
 sys.path.insert(0, PROJECT)
 

@@ -47,8 +47,11 @@ def get_category(filename):
     return "其他"
 
 def main():
-    raw_dir = "D:/wxu/wxu-multimodal-smart-agent/data/docs/raw"
-    base_dir = "D:/wxu/wxu-multimodal-smart-agent/data/docs"
+    # 2026-10-09 修复：原硬编码 "D:/wxu/..." 改为相对脚本位置推导
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent
+    raw_dir = str(_root / "data" / "docs" / "raw")
+    base_dir = str(_root / "data" / "docs")
 
     # 创建分类文件夹
     for category in CATEGORIES.keys():

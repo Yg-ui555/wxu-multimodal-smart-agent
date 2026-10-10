@@ -29,9 +29,18 @@ import hashlib
 from typing import List
 
 # 解决Windows控制台编码问题
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
+# 2026-10-09 修复:daily_crawl.py 子进程里 sys.stdout 可能是 None,直接 reconfigure 会 AttributeError 炸掉
+# 加 sys.stdout is not None 守卫 + try/except 兜底
+if sys.platform == "win32" and sys.stdout is not None:
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except (AttributeError, OSError):
+        pass
+if sys.platform == "win32" and sys.stderr is not None:
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except (AttributeError, OSError):
+        pass
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document

@@ -1,5 +1,5 @@
 @echo off
-REM WXU daily crawl launcher - keep crawling every day at 02:00
+REM WXU daily crawl launcher - keep crawling every day at 18:00 (default)
 REM Usage: double-click this file or run from PowerShell
 
 setlocal
