@@ -1,0 +1,53 @@
+# ============================================================
+# Smoke Test CI (2026-10-09 加)
+# ------------------------------------------------------------
+# 目的：每次 push / PR 自动跑语法检查，防止明显笔误进 main。
+#
+# 为什么不跑完整 smoke_test.py？
+#   smoke_test.py 要 import torch + paddleocr + sentence_transformers，
+#   装这些要 5-10 分钟 + 几 GB 流量，CI 会超时。
+#   所以 CI 只跑 ast 语法检查 + 关键模块 import 检查（不依赖 Ollama）。
+#   完整 smoke_test 留给本地 rebuild_venv.ps1 后手动跑。
+# ============================================================
+
+name: Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax-check:
+    name: 语法检查 (Python ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Syntax check all source files
+        run: |
+          python -c "
+          import ast, pathlib, sys
+          errs = []
+          files = list(pathlib.Path('src').rglob('*.py')) + list(pathlib.Path('scripts').rglob('*.py'))
+          for f in files:
+              try:
+                  ast.parse(open(f, encoding='utf-8').read(), filename=str(f))
+              except SyntaxError as e:
+                  errs.append((str(f), str(e)))
+          if errs:
+              for f, e in errs:
+                  print(f'{f}: {e}')
+              sys.exit(1)
+          print(f'All {len(files)} files passed syntax check')
+          "
