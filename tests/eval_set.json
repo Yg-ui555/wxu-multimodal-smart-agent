@@ -174,5 +174,345 @@
     "banned_keywords": ["卷首", "填空", "选择", "解：", "求", "中断", "定时器", "51", "STM32"],
     "_compliance_mode": "reject",
     "note": "2026-09-21 合规：应拒绝"
+  },
+
+  {
+    "id": 21,
+    "category": "政策-奖学金",
+    "difficulty": "easy",
+    "question": "校一等奖学金多少钱？",
+    "expected_keywords": ["奖学金", "800"],
+    "note": "查 KB 里《学校奖学金评定办法》金额档；800 元在 KB 里有；'奖学金' 必现"
+  },
+  {
+    "id": 22,
+    "category": "政策-奖学金",
+    "difficulty": "medium",
+    "question": "国家励志奖学金和校奖学金能同时拿吗？",
+    "expected_keywords": ["不可", "兼得"],
+    "banned_keywords": ["可以兼得", "可以同时获得", "能同时拿"],
+    "note": "KB 里写'不可与国家奖学金、国家励志奖学金兼得'；LLM 答出'不可兼得'/'不能同时' 都算对"
+  },
+  {
+    "id": 23,
+    "category": "政策-奖学金",
+    "difficulty": "medium",
+    "question": "奖学金评定要参考综合测评吗？",
+    "expected_keywords": ["综合测评", "50%"],
+    "note": "KB 写'综合测评成绩需名列同一年级同一专业前 50%'；验证数字召回"
+  },
+  {
+    "id": 24,
+    "category": "政策-转专业",
+    "difficulty": "medium",
+    "question": "转专业什么时候申请？",
+    "expected_keywords": ["转专业", "申请"],
+    "note": "办事流程类，跟 ID 9 类似但问法不同（验证 query rewriting 一致性）"
+  },
+  {
+    "id": 25,
+    "category": "政策-转专业",
+    "difficulty": "medium",
+    "question": "转专业要交什么材料？",
+    "expected_keywords": ["申请书", "证明"],
+    "note": "KB 里写'提交申请书和相关证明材料'"
+  },
+  {
+    "id": 26,
+    "category": "政策-转专业",
+    "difficulty": "hard",
+    "question": "转专业对成绩有什么要求？",
+    "expected_keywords": ["成绩", "学分"],
+    "note": "KB 写按'加权平均成绩'排名；'成绩'+'学分' 放宽覆盖'加权成绩'等说法"
+  },
+  {
+    "id": 27,
+    "category": "政策-四六级",
+    "difficulty": "medium",
+    "question": "四六级什么时候报名？",
+    "expected_keywords": ["报名", "四级"],
+    "banned_keywords": ["不知道"],
+    "note": "教务处 / 教务系统通知里通常有报名时间；如 KB 暂无则 answer_hit 可能 false，但 banned 不能命中"
+  },
+  {
+    "id": 28,
+    "category": "政策-四六级",
+    "difficulty": "medium",
+    "question": "四六级报名费多少？",
+    "expected_keywords": ["报名"],
+    "banned_keywords": ["不知道"],
+    "note": "金额题：若 KB 有具体数字，LLM 应给出；若 KB 没有，应'建议查官网'"
+  },
+  {
+    "id": 29,
+    "category": "政策-创业",
+    "difficulty": "medium",
+    "question": "大学生创业有什么扶持政策？",
+    "expected_keywords": ["创业"],
+    "note": "创新创业相关通知；如 KB 无具体细则，LLM 应引导到就业指导中心"
+  },
+  {
+    "id": 30,
+    "category": "政策-心理",
+    "difficulty": "medium",
+    "question": "学校心理咨询怎么预约？",
+    "expected_keywords": ["心理", "咨询", "学工"],
+    "note": "学工处心理健康相关通知"
+  },
+
+  {
+    "id": 31,
+    "category": "同义词-数字电路",
+    "difficulty": "hard",
+    "question": "译码器在数字电路里是什么？",
+    "expected_keywords": ["译码", "数字电路"],
+    "note": "验证 bge-m3 能从'译码器 ↔ decoder / 解码器'语义召回到数字电路章节"
+  },
+  {
+    "id": 32,
+    "category": "同义词-数字电路",
+    "difficulty": "hard",
+    "question": "加法器在数字电路里干啥的？",
+    "expected_keywords": ["加法", "数字电路"],
+    "note": "adder ↔ 加法器 语义召回验证"
+  },
+  {
+    "id": 33,
+    "category": "同义词-数字电路",
+    "difficulty": "hard",
+    "question": "触发器和锁存器有什么不一样？",
+    "expected_keywords": ["触发", "锁存"],
+    "note": "flip-flop ↔ 触发器 / latch ↔ 锁存器 召回验证"
+  },
+  {
+    "id": 34,
+    "category": "同义词-数字电路",
+    "difficulty": "hard",
+    "question": "时序电路和组合电路差在哪？",
+    "expected_keywords": ["时序", "组合"],
+    "note": "sequential ↔ 时序 / combinational ↔ 组合 召回；跟 ID 14 互为同义说法"
+  },
+  {
+    "id": 35,
+    "category": "同义词-数字电路",
+    "difficulty": "hard",
+    "question": "数据选择器 MUX 是什么东西？",
+    "expected_keywords": ["选择", "数据"],
+    "note": "MUX (multiplexer) ↔ 数据选择器 术语 gap 测试"
+  },
+
+  {
+    "id": 36,
+    "category": "多模态近似",
+    "difficulty": "easy",
+    "question": "这周图书馆几点关门？",
+    "expected_keywords": ["图书馆", "关门"],
+    "banned_keywords": ["不知道"],
+    "note": "场景：拍图书馆开放时间表拍照提问。文字版近似"
+  },
+  {
+    "id": 37,
+    "category": "多模态近似",
+    "difficulty": "easy",
+    "question": "今天中午食堂有什么菜？",
+    "expected_keywords": ["食堂", "菜"],
+    "note": "场景：拍食堂菜单拍照"
+  },
+  {
+    "id": 38,
+    "category": "多模态近似",
+    "difficulty": "medium",
+    "question": "周末校车几点发车？",
+    "expected_keywords": ["校车"],
+    "banned_keywords": ["不知道"],
+    "note": "场景：拍校车时刻表"
+  },
+  {
+    "id": 39,
+    "category": "多模态近似",
+    "difficulty": "easy",
+    "question": "宿舍几点有热水？",
+    "expected_keywords": ["热水"],
+    "note": "场景：拍宿舍楼下热水告示"
+  },
+  {
+    "id": 40,
+    "category": "多模态近似",
+    "difficulty": "easy",
+    "question": "这学期补考什么时候？",
+    "expected_keywords": ["补考"],
+    "note": "场景：拍教务处补考通知"
+  },
+  {
+    "id": 41,
+    "category": "多模态近似",
+    "difficulty": "medium",
+    "question": "图书馆闭馆音乐几点开始？",
+    "expected_keywords": ["闭馆"],
+    "note": "场景：拍图书馆门口告示（比较细节的功能）"
+  },
+  {
+    "id": 42,
+    "category": "多模态近似",
+    "difficulty": "medium",
+    "question": "我这周二第3节在哪上？",
+    "expected_keywords": ["周", "课"],
+    "note": "场景：拍自己课程表。需要 curriculum 模块，但 KB 检索不一定有，应回退到常识"
+  },
+  {
+    "id": 43,
+    "category": "多模态近似",
+    "difficulty": "easy",
+    "question": "行政楼在图书馆的哪边？",
+    "expected_keywords": ["行政楼"],
+    "note": "场景：拍校园地图；如 KB 无地图文档应老实说不知道"
+  },
+  {
+    "id": 44,
+    "category": "多模态近似",
+    "difficulty": "easy",
+    "question": "这块电路板上哪个元件是电容？",
+    "expected_keywords": ["电容"],
+    "note": "场景：拍一张电路板。文字版近似（不带图也能聊元件）"
+  },
+  {
+    "id": 45,
+    "category": "多模态近似",
+    "difficulty": "medium",
+    "question": "食堂早餐一份多少钱？",
+    "expected_keywords": ["食堂", "早餐"],
+    "note": "场景：拍食堂档口价目表"
+  },
+
+  {
+    "id": 46,
+    "category": "数字表格-食堂",
+    "difficulty": "medium",
+    "question": "食堂周一菜单有什么？",
+    "expected_keywords": ["食堂", "菜"],
+    "note": "数字 / 表格抽取；如 KB 暂无菜单文档，LLM 应 fallback 到常识回答"
+  },
+  {
+    "id": 47,
+    "category": "数字表格-宿舍",
+    "difficulty": "easy",
+    "question": "宿舍热水供应时间？",
+    "expected_keywords": ["热水"],
+    "note": "后勤处通知可能有"
+  },
+  {
+    "id": 48,
+    "category": "数字表格-图书馆",
+    "difficulty": "medium",
+    "question": "周六周日图书馆开不开门？",
+    "expected_keywords": ["图书馆", "周末"],
+    "banned_keywords": ["图书馆周一到周日开放"],
+    "note": "周末开放规则；banned 拦截'周一到周日都开'这种泛化措辞"
+  },
+  {
+    "id": 49,
+    "category": "数字表格-课程",
+    "difficulty": "easy",
+    "question": "一节课多长时间？",
+    "expected_keywords": ["节"],
+    "note": "如 KB 写'45 分钟'，'节'必现；放宽匹配'"
+  },
+  {
+    "id": 50,
+    "category": "数字表格-学分",
+    "difficulty": "medium",
+    "question": "一学期要修多少学分？",
+    "expected_keywords": ["学分"],
+    "note": "教学计划 / 培养方案类；数字抽取"
+  },
+
+  {
+    "id": 51,
+    "category": "闲聊",
+    "difficulty": "easy",
+    "question": "介绍一下你自己",
+    "expected_keywords": ["智能", "助手"],
+    "banned_keywords": ["OpenAI", "Claude"],
+    "note": "自我介绍类，ID 10 同主题另一种问法"
+  },
+  {
+    "id": 52,
+    "category": "闲聊",
+    "difficulty": "easy",
+    "question": "你能帮我干什么？",
+    "expected_keywords": [],
+    "banned_keywords": ["OpenAI", "Claude"],
+    "note": "无 expected；banned 拦截身份错认；其他靠 fallback_chain 兜底"
+  },
+  {
+    "id": 53,
+    "category": "闲聊",
+    "difficulty": "easy",
+    "question": "请问有人在吗？",
+    "expected_keywords": [],
+    "note": "闲聊 greeting，验证问候模板不重复'你好'"
+  },
+  {
+    "id": 54,
+    "category": "闲聊",
+    "difficulty": "easy",
+    "question": "谢谢你",
+    "expected_keywords": [],
+    "banned_keywords": ["不知道", "无法"],
+    "note": "感谢类，不应被识别成'我不知道'"
+  },
+  {
+    "id": 55,
+    "category": "闲聊",
+    "difficulty": "easy",
+    "question": "再见",
+    "expected_keywords": [],
+    "note": "告别类；验证 chat 模板支持"
+  },
+
+  {
+    "id": 56,
+    "category": "失败兜底",
+    "difficulty": "medium",
+    "question": "我家狗生病了怎么办？",
+    "expected_keywords": [],
+    "banned_keywords": ["学校通知", "教务处", "奖学金"],
+    "note": "完全无关问题；banned 拦截'硬拽到学校话题'的胡说"
+  },
+  {
+    "id": 57,
+    "category": "失败兜底",
+    "difficulty": "medium",
+    "question": "隔壁江南大学的奖学金怎么申请？",
+    "expected_keywords": ["江南大学"],
+    "banned_keywords": ["可以"],
+    "note": "其他学校问题；LLM 应说'本校知识库不含江南大学'，不应擅自给答案；banned 拦截'可以'\u00b7"
+  },
+  {
+    "id": 58,
+    "category": "失败兜底",
+    "difficulty": "medium",
+    "question": "2027 年寒假什么时候？",
+    "expected_keywords": [],
+    "banned_keywords": ["不知道", "无法"],
+    "note": "未来年份；banned 拦截直接说'不知道'，期望 fallback 给中性措辞"
+  },
+  {
+    "id": 59,
+    "category": "失败兜底",
+    "difficulty": "easy",
+    "question": "今天无锡天气怎么样？",
+    "expected_keywords": [],
+    "banned_keywords": ["不知道", "无法"],
+    "note": "实时天气；KB 不会有；期望友好 fallback"
+  },
+  {
+    "id": 60,
+    "category": "失败兜底",
+    "difficulty": "medium",
+    "question": "Python 怎么入门？",
+    "expected_keywords": ["Python", "入门"],
+    "banned_keywords": ["教务处", "奖学金"],
+    "note": "开放技术问题；LLM 应基于常识给简短路径；banned 拦截'硬拽校园'"
   }
 ]
