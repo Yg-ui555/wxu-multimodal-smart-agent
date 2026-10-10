@@ -176,7 +176,94 @@ def parse_experiment_table_rows(rows: List[Dict], user_class: str = "") -> List[
         })
 
     log.info(f"实验课表解析: {len(rows)} 行 -> {len(results)} 条匹配班级 '{user_class}'")
-    return results
+
+    # ★ 范围合并(2026-10-10 加): 实验课表里同一节课常在连续多周都出现,
+    #   例如 "第4周 实验2 + 第6周 实验2",用户看课表时希望看到 1 条范围
+    #   ("双周 第4-6周 实验2")而不是 2 条独立行。
+    #   合并规则:
+    #     - 分组 key = (day, sec_start, sec_end, course, location, teacher)
+    #       → 同课程 + 同时间槽 视为同一节课
+    #     - 同组内的多行 → 合并成 1 条
+    #       start_week = min, end_week = max
+    #       week_type: 全奇→odd, 全偶→even, 混合→every
+    #     - 跨课程:不同 course_name → 不同分组,不合并(如 "实验2" 不和 "实验3" 合并)
+    merged = _merge_continuous_weeks(results)
+    log.info(f"范围合并后: {len(results)} 条 -> {len(merged)} 条")
+    return merged
+
+
+def _merge_continuous_weeks(rows: List[Dict]) -> List[Dict]:
+    """
+    把同一节课(同 day+sec+course+location+teacher)的多个周次合并成范围。
+
+    输入(来自 parse_experiment_table_rows 的每行结果,start_week=end_week=w):
+        [
+          {course_name: "实验2", day_of_week: 1, start_section: 7, end_section: 8,
+           location: "...", teacher: "...", start_week: 4, end_week: 4, week_type: "every"},
+          {course_name: "实验2", day_of_week: 1, start_section: 7, end_section: 8,
+           location: "...", teacher: "...", start_week: 6, end_week: 6, week_type: "every"},
+        ]
+
+    输出(合并后):
+        [
+          {course_name: "实验2", day_of_week: 1, start_section: 7, end_section: 8,
+           location: "...", teacher: "...", start_week: 4, end_week: 6, week_type: "even"},
+        ]
+
+    边界情况:
+        - 同组内 weeks 全是奇数 → week_type="odd"(只在这个节上)
+        - 同组内 weeks 全是偶数 → week_type="even"(只在双周上)
+        - 混合奇偶 → week_type="every"(每周都上,例如 1 周 + 2 周都有)
+        - 单条 row → start_week == end_week, week_type 由原 row 决定(默认 every,合并时会按 w 的奇偶重新算)
+        - 跨课程:不在同一分组 → 不合并,各自保留
+    """
+    if not rows:
+        return []
+
+    # 1. 按"分组 key"聚类
+    groups: Dict[Tuple, List[int]] = {}  # key → [week1, week2, ...]
+    templates: Dict[Tuple, Dict] = {}   # key → 第一个 row 当模板(用于保留 location/teacher 等)
+
+    for r in rows:
+        # ★ 分组 key:把课程名完整当一行——不同实验(实验2 vs 实验3) 自然分开,
+        #   不会被错误合并
+        key = (
+            r["day_of_week"],
+            r["start_section"],
+            r["end_section"],
+            r["course_name"],   # 完整匹配,不取前缀
+            r.get("location", ""),
+            r.get("teacher", ""),
+        )
+        if key not in groups:
+            groups[key] = []
+            templates[key] = r  # 第一个 row 当模板
+        # ★ 取 start_week(每条 row 是单周次,start_week == end_week)
+        wk = r.get("start_week", r.get("end_week", 0))
+        if wk:
+            groups[key].append(int(wk))
+
+    # 2. 每组算 week_type + 输出合并后的 row
+    merged: List[Dict] = []
+    for key, weeks in groups.items():
+        weeks_sorted = sorted(set(weeks))  # 去重 + 排序
+        if not weeks_sorted:
+            continue
+
+        # ★ 奇偶判定:全奇→odd, 单周;全偶→even, 双周;混合→every,每周
+        all_odd = all(w % 2 == 1 for w in weeks_sorted)
+        all_even = all(w % 2 == 0 for w in weeks_sorted)
+        week_type = "odd" if all_odd else ("even" if all_even else "every")
+
+        # 用模板 row,覆盖周次范围
+        row = dict(templates[key])
+        row["start_week"] = min(weeks_sorted)
+        row["end_week"] = max(weeks_sorted)
+        row["week_type"] = week_type
+        merged.append(row)
+
+    log.debug(f"[merge] {len(rows)} 条 → {len(merged)} 条 (合并掉 {len(rows) - len(merged)} 条重复周次)")
+    return merged
 
 
 def parse_experiment_table(file_path: str, user_class: str = "") -> List[Dict]:
