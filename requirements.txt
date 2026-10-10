@@ -15,8 +15,7 @@
 #   补丁内容见 docs/issues/ 或联系维护者
 # ============================================================
 
-# ---------- Web / 应用框架 ----------
-gradio==6.28.0
+# ---------- Web / 应用框架（FastAPI 多页架构，2026-10-09 移除 Gradio） ----------
 python-dotenv==1.2.3
 apscheduler==3.11.3
 
@@ -27,9 +26,9 @@ langchain-text-splitters==1.1.2
 langchain-ollama==1.1.0
 langchain-openai==1.6.2
 faiss-cpu==1.15.1
-chromadb==1.5.9
 rank-bm25==0.2.2
 jieba==0.42.1
+sentence-transformers==5.5.0   # 2026-10-09 加：smoke_test.py:69 / eval_runner.py 间接 import；原 requirements 漏列
 
 # ---------- 文档解析 ----------
 pymupdf==1.28.2            # PyMuPDFLoader (PDF)
@@ -64,3 +63,6 @@ jinja2==3.1.6                   # 页面模板渲染
 pdfplumber==0.11.4              # PDF 课表解析
 sqlalchemy==2.1.0               # ORM（备用，memory 用原生 sqlite3）
 slowapi==0.1.10                 # 2026-09-24 加:API 限流(防 LLM 配额/计算资源被刷爆)
+
+# ---------- 开发 / 测试（2026-10-09 加：CI 语法检查 + pytest 雏形） ----------
+pytest==8.4.2                   # pytest 雏形测试（tests/ 目录）

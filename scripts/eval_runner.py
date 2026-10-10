@@ -72,7 +72,7 @@ def score_case(case: dict, answer: str, docs: list) -> dict:
 
 # ─────────────────────────── 主跑评估 ───────────────────────────
 def run_eval(vector_db_dir: str = "data/faiss_db_bge", use_simple: bool = False,
-            use_hyde: bool = False) -> dict:
+            use_hyde: bool = False, use_upper_bound: bool = False) -> dict:
     """
     跑整个 eval_set，返回结构化结果（含 summary + cases）。
 
@@ -87,22 +87,25 @@ def run_eval(vector_db_dir: str = "data/faiss_db_bge", use_simple: bool = False,
     from src.rag.chat_history import create_chat_manager
 
     print(f"[eval] 启动 {datetime.now().isoformat(timespec='seconds')}")
-    print(f"[eval] 配置: use_hyde={use_hyde}")
+    print(f"[eval] 配置: use_hyde={use_hyde} use_upper_bound={use_upper_bound}")
+    print(f"[eval] 配置: {'评估上限(纯 bge + reranker)' if use_upper_bound else '生产同步(bm25+向量 RRF,无 reranker)'}")
 
     # 初始化 RAG（轻量：和 gr.App 一样）
     mgr = VectorStoreManager(persist_directory=vector_db_dir)
     mgr.load_vectorstore()
+    # 2026-10-08 改:默认配置跟生产 rag_engine.py 对齐(关 reranker + 开 BM25 + 8/8 双路)。
+    # 评估上限模式(纯 bge + BGE-reranker 启用)用 --upper-bound 触发
     retriever = create_retriever(
         mgr.vectorstore,
         documents=mgr._documents,
         top_k=4,
-        use_bm25=False,    # 评测只看 bge 路径（BM25 路径在 web_app 中启用，逻辑统一）
-        use_reranker=True,
-        reranker_model='BAAI/bge-reranker-v2-m3',  # 2026-09-20 启用（已预下载到 HF cache）
-        vector_top_k=5,    # 2026-09-20 减 rerank 输入数：10 → 5（latency 砍半，pass_rate 几乎不掉）
-        bm25_top_k=5,      # 同上
+        use_bm25=not use_upper_bound,             # 生产开 BM25,评估上限关
+        use_reranker=use_upper_bound,             # 评估上限启用重排器
+        reranker_model='BAAI/bge-reranker-v2-m3' if use_upper_bound else None,
+        vector_top_k=5 if use_upper_bound else 8, # 上限模式 5,生产 8
+        bm25_top_k=5 if use_upper_bound else 8,
         use_hyde=use_hyde,
-        hyde_llm=None,     # eval runner 不用 chat_manager 的 LLM，下面单独建一个
+        hyde_llm=None,
     )
     qa = create_qa_system(retriever)
     # 如果启用 HyDE，把 LLM 注入 retriever
@@ -166,11 +169,15 @@ def main():
     ap.add_argument("--vector-db", default="data/faiss_db_bge")
     ap.add_argument("--use-hyde", action="store_true",
                     help="启用 HyDE 召回增强（2026-09-17 新加）")
+    ap.add_argument("--upper-bound", action="store_true",
+                    help="2026-10-08 加：评估上限模式（纯 bge + 启用 BGE-reranker + 5/5 双路），"
+                         "用于看 pass_rate 上限，与生产同步配置 (BM25+向量 8/8 关 reranker) 对比")
     ap.add_argument("--label", default="current",
                     help="输出 JSON 后缀（默认 current）")
     args = ap.parse_args()
 
-    result = run_eval(vector_db_dir=args.vector_db, use_hyde=args.use_hyde)
+    result = run_eval(vector_db_dir=args.vector_db, use_hyde=args.use_hyde,
+                      use_upper_bound=args.upper_bound)
     target = BASELINE_PATH if args.save_baseline else Path(str(CURRENT_PATH).replace(".json", f"_{args.label}.json"))
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
