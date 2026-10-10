@@ -30,11 +30,14 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
 import threading
+import logging
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DB_DIR = PROJECT_ROOT / "data" / "sqlite"
 DB_DIR.mkdir(parents=True, exist_ok=True)
+
+log = logging.getLogger("curriculum.db")
 
 
 def get_db_path(user_id: str) -> Path:
@@ -43,6 +46,7 @@ def get_db_path(user_id: str) -> Path:
     return DB_DIR / f"curriculum_{safe_id}.db"
 
 
+# 只放 CREATE TABLE,索引放到 init_db() 里(2026-10-10 改: 索引列必须在迁移后建,否则老 DB 缺列会报错)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS curriculum (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,9 +64,6 @@ CREATE TABLE IF NOT EXISTS curriculum (
     source          TEXT,
     uploaded_at     TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_user_day ON curriculum(user_id, day_of_week);
-CREATE INDEX IF NOT EXISTS idx_user_class ON curriculum(user_id, class_id);
 """
 
 
@@ -79,10 +80,40 @@ def _get_lock(user_id: str) -> threading.Lock:
 
 
 def init_db(user_id: str) -> sqlite3.Connection:
-    """打开（或创建）用户的课表数据库"""
+    """打开(或创建)用户的课表数据库,自动补齐老 schema 缺的列
+
+    2026-10-10 加 schema migration:
+        10/9 加了 class_id 列,但老 DB(9/22-9/23 创建)没有这列。
+        CREATE TABLE IF NOT EXISTS 对已存在表无效 → load_curriculum 会
+        SELECT class_id 报 "no such column" 错。
+        解决:init_db 时用 PRAGMA table_info 检查,缺的 ALTER TABLE 加上,
+        幂等(已加的不重复加)。
+    """
     db_path = get_db_path(user_id)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.executescript(SCHEMA)
+
+    # ★ Schema migration: 老 DB 没 class_id 列 → 补上(默认 NULL)
+    #    补完后老数据的 class_id 都是 NULL,对应"未分班的公共课"语义
+    cur = conn.execute("PRAGMA table_info(curriculum)")
+    existing_cols = {row[1] for row in cur}
+
+    # ★ 这里列"缺的列 → ALTER 加"的清单;以后再加字段也在此追加
+    MIGRATIONS = [
+        ("class_id", "INTEGER DEFAULT NULL"),
+        # 例:("new_col", "TEXT DEFAULT ''"),  # 2026-XX-XX 加:xxx 字段
+    ]
+    for col_name, col_def in MIGRATIONS:
+        if col_name not in existing_cols:
+            conn.execute(f"ALTER TABLE curriculum ADD COLUMN {col_name} {col_def}")
+            log.info(f"[schema migration] {db_path.name}: +{col_name} 列")
+
+    # ★ 索引必须在 migration 之后建 —— 老 DB 缺 class_id 时,
+    #    CREATE INDEX idx_user_class ON curriculum(user_id, class_id) 会
+    #    抛 "no such column" 异常中断整个 init_db,导致 ALTER 都没机会跑。
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_day ON curriculum(user_id, day_of_week)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_class ON curriculum(user_id, class_id)")
+
     conn.commit()
     return conn
 
