@@ -1,6 +1,9 @@
 # WXU 项目能力清单
 
 > 写在前面：本项目涉及的能力按"必掌握→加分项"分4层。建议按顺序学习。
+>
+> ⚠️ **数字以 [README.md](../README.md) 为准（2026-10-09 修订）**：本文早期写"12334 chunks / answer_relevancy 0.89 / LLaVA 联动 / Function Calling 4 个工具"等说法**都与当前代码不符**。实际：29447 文本块、无 LLaVA、无 Function Calling、无 Ragas 指标（项目用自写 eval_runner 跑 15 题基线，参考 README 评估上限表）。
+> 下文保留旧表述作为开发历程参考，但**面试时不要照搬**——按 README 实测数据说。
 
 ---
 
@@ -69,7 +72,7 @@ ollama serve          # 启动服务（默认127.0.0.1:11434）
 | `vector_store.py::create_vectorstore` | FAISS 增量保存（不重建） |
 | `build_vectorstore.py` | stdout 心跳防监控误判 |
 
-**面试故事**：构建 12334 文本块需要 2 小时，中途进程被杀 0 损失，靠什么？
+**面试故事**：构建 29447 文本块需要 2 小时，中途进程被杀 0 损失，靠什么？
 
 ### 7. 向量库性能调优（⭐⭐⭐⭐）
 
@@ -113,7 +116,9 @@ ollama serve          # 启动服务（默认127.0.0.1:11434）
 ### 14. 1 分钟项目介绍
 
 模板：
-> "我做的是无锡学院多模态智能体，核心是 RAG + Agent 双引擎。RAG 引擎覆盖 12334 个文档块、12 类校园知识，answer_relevancy 0.89。多模态用 YOLOv8 + LLaVA 联动，拍照即查。Agent 用 Function Calling 调度 4 个工具，期间解决了 3 个核心问题：PDF 乱码清洗、多轮对话指代丢失、RAG 召回不准。"
+> "我做的是无锡学院多模态智能体，核心是 RAG + Agent 双引擎。RAG 引擎覆盖 29447 个文档块、12 类校园知识。多模态用 YOLOv8 + PaddleOCR 联动，拍照即查。Agent 用意图分类 + 路由表调度（schedule / scholarship / kb / news / general），期间解决了 3 个核心问题：PDF 乱码清洗、多轮对话指代丢失、RAG 召回不准。"
+
+> 注：早期版本曾写"12334 chunks / answer_relevancy 0.89 / LLaVA / Function Calling 4 个工具"，**这些都不准确**（实际见 README 评估上限表）。
 
 ### 15. Bad Case 分析报告
 
