@@ -48,20 +48,42 @@ def _parse_section_range(s: str) -> Tuple[int, int]:
 def _class_in_user_class(class_str: str, user_class: str) -> bool:
     """判断 class_str 字段里是否包含 user_class 班级
 
+    2026-10-10 容错:OCR 把"24电信1,24电信2,24电信3(第3批)"切成两块导致
+    class_str 只剩"24电信1,24电信"——严格匹配会漏掉"24电信2"。
+    加 2 条宽容规则:
+      1. 提取 class_str 里的"班级编号段"(如"24电信1"提取出"1"),用 set 保存
+      2. 同样提取 user_class 的编号,看在 set 里
+      3. 同时支持原始字符串包含(防御)
+
     Args:
-        class_str: 课程表里的"班级"字段
-            例: "24电信1, 24电信2, 24电信3(第2批)" / "24电信1, 24电信2"
+        class_str: 课程表里的"班级"字段(可能因 OCR 截断不完整)
+            例: "24电信1, 24电信2, 24电信3(第2批)" / "24电信1,24电信"
         user_class: 用户自己的班级名
-            例: "24电信2" / "电信2201"
+            例: "24电信2" / "电信2201" / "24电信3"
     Returns:
         True = 命中(这节课有自己班), False = 没命中
     """
     if not class_str or not user_class:
         return False
-    # 直接字符串包含
+    # 规则 1: 直接字符串包含(原逻辑)
     if user_class in class_str:
         return True
-    # 兼容: "电信2201" vs "24电信1" - 这种不通用,让用户自己设置成一致
+    # 规则 2: 提取班级编号(末尾数字),set 匹配
+    # "24电信2" → "2"; "24电信1,24电信2,24电信3(第3批)" → {"1","2","3"}
+    import re as _re
+    user_nums = set(_re.findall(r"\d+$", user_class))
+    if not user_nums:
+        return False
+    # 从 class_str 里提取所有"X电信Y"或"Y电信X"模式的班级编号
+    class_nums = set(_re.findall(r"电信(\d+)|(\d+)电信", class_str))
+    # class_nums 是 set of tuples [(num, "") 或 ("", num)],flatten 成数字 set
+    flat = set()
+    for tup in class_nums:
+        for x in tup:
+            if x:
+                flat.add(x)
+    if user_nums & flat:  # 交集非空 → 命中
+        return True
     return False
 
 
@@ -356,52 +378,115 @@ def _read_csv(p: Path) -> List[Dict]:
 
 
 def _read_image(p: Path) -> List[Dict]:
-    """读图片:OCR 抽取文字,再用正则解析"""
+    """
+    读图片:OCR 抽取文字 → 按 Y 坐标同行合并 → 宽正则解析
+
+    2026-10-10 大改:旧实现假设 OCR 按行输出整节课文本,但 PaddleOCR 实际按
+    cell 块输出 + 半/全角括号混用 + 字段被切碎(如 "24电信1,24电信" + "2,24电信3(第3批)"
+    是两块; "1-4(08:00-11:5" + "0)" 是两块),旧 row_pat 100% 漏匹配。
+    新实现:
+        1. 直接调 PaddleOCR 拿 boxes(text + 4 角坐标)
+        2. 按 Y 坐标聚合同行(Y 中心差 < 阈值)
+        3. 同行多 cell 按 X 排序拼接成完整行字符串
+        4. 用宽正则匹配(接受半/全角括号、缺"星期"字面量等)
+    """
     try:
-        from src.ocr.ocr_engine import extract_text
-        result = extract_text(str(p), conf_threshold=0.5)
-        text = (result or {}).get("text", "").strip()
+        from paddleocr import PaddleOCR
+    except ImportError:
+        log.error("paddleocr 未安装,无法 OCR 图片")
+        return []
+
+    try:
+        ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+        result = ocr.ocr(str(p), cls=True)
     except Exception as e:
-        log.exception(f"OCR 失败: {e}")
+        log.exception(f"OCR 初始化/识别失败: {e}")
         return []
 
-    if not text:
+    # 1. 收集所有 (text, conf, box),计算 Y 中心 + X 起点
+    items = []
+    for r in result or []:
+        for box, (text, conf) in r or []:
+            if conf < 0.5:
+                continue
+            text = (text or "").strip()
+            if not text:
+                continue
+            # box: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+            y_min = min(p[1] for p in box)
+            y_max = max(p[1] for p in box)
+            x_min = min(p[0] for p in box)
+            items.append({
+                "text": text,
+                "conf": conf,
+                "y_center": (y_min + y_max) / 2,
+                "x_min": x_min,
+            })
+    if not items:
+        log.warning(f"[OCR] {p.name}: 未识别出任何文字(conf<0.5 全过滤)")
         return []
 
-    log.info(f"OCR 抽到 {len(text)} 字符,正则解析中...")
+    # 2. 按 Y 坐标聚合同行(Y 中心差 < 阈值视为同一行)
+    items.sort(key=lambda x: (x["y_center"], x["x_min"]))
 
-    # 行模式:每行一条实验课
-    # 例: "第 2 周 星期 1 20260914 7-8(15:55-17:35) 24电信1, 24电信2, 24电信3(24电信2) 实验1 嵌入式电子技术综合实验室1(071)(21202071)"
-    # 或表格截图(每行多个字段,空格分隔)
+    Y_THRESHOLD = 15  # 同行 Y 中心差阈值(像素,够宽,覆盖表格边框/小偏差)
+    rows: List[List[Dict]] = []
+    for it in items:
+        if rows and abs(rows[-1][-1]["y_center"] - it["y_center"]) < Y_THRESHOLD:
+            rows[-1].append(it)  # 跟上一行合并
+        else:
+            rows.append([it])
+
+    # 3. 同行按 X 排序 → 拼接成完整行字符串
+    lines = []
+    for row_items in rows:
+        row_items.sort(key=lambda x: x["x_min"])
+        line = " ".join(it["text"] for it in row_items)
+        if line.strip():
+            lines.append(line)
+
+    log.info(f"[OCR] {p.name}: {len(items)} 个 cell 块 → {len(lines)} 行(同行合并)")
+
+    # 4. 宽正则匹配
+    #    期望每行:"第X周 [星期Y] YYYYMMDD 节-节(time) 班级 实验N 实验室"
+    #    容忍:
+    #      - "星期"字面量可选(OCR 可能漏字)
+    #      - 括号接受半/全角 ( ) and 「」
+    #      - 空白宽容(\s*)
+    #      - 班级段不含"实验"二字(避免吞掉课程名)
     row_pat = re.compile(
-        r"第\s*(\d+)\s*周\s+"
-        r"星期\s*(\d+|[一二三四五六日天])\s+"
-        r"(\d{8})\s+"
-        r"(\d+[-—~]\d+)\([^)]+\)\s+"
-        r"([^实验]+?)\s+"
-        r"(实验[一二三四五六七八九十\d]+)\s+"
-        r"(\S+(?:\(\d+\))?(?:\(\d+\))?)\s*"
+        r"第\s*(\d+)\s*周"                    # 第X周
+        r"[^\d]*?"                           # 容许多种字符(替代"星期"段,接受缺失)
+        r"(\d+|[一二三四五六日天天])"          # 星期数字(必须)
+        r"\D*?"                              # 容许非数字字符
+        r"(\d{8})"                            # 8 位日期
+        r"\D*?"
+        r"(\d+[-—~]\d+)"                      # 节-节
+        r"\s*[\(（]([^\)）]+)[\)）]"            # (time) 接受半/全角
+        r"\s*"
+        r"([^\s实验][^实验]*?)"               # 班级(不含"实验"二字)
+        r"\s+"
+        r"(实验[一二三四五六七八九十\d]+)"       # 实验N
+        r"\s*"
+        r"(\S+(?:\(\d+\))?(?:\(\d+\))?)"        # 实验室(可能带 (xxx)(yyy))
     )
 
-    rows = []
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line or "周" not in line:
-            continue
+    parsed = []
+    for line in lines:
         m = row_pat.search(line)
         if not m:
             continue
-        week, day, _date, section, class_str, course, lab = m.groups()
-        # 构造与 Excel 读取一致的行 dict
-        rows.append({
+        # 8 个 group,但只用 7 个字段(section 不含括号)
+        week, day, _date, section, _time_in_parens, class_str, course, lab = m.groups()
+        parsed.append({
             "周次": f"第 {week} 周",
             "星期": day,
             "时间": _date,
-            "节次/时间": section,
+            "节次/时间": section,  # 不含括号,_parse_section_range 只吃"7-8"
             "班级名称": class_str.strip().rstrip(","),
             "课程名称": course.strip(),
             "实验室": lab.strip(),
         })
 
-    log.info(f"OCR 解析得到 {len(rows)} 行")
-    return rows
+    log.info(f"[OCR 解析] {p.name}: {len(parsed)} 条课行(从 {len(lines)} 行 OCR 文本中)")
+    return parsed
