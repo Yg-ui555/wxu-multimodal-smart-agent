@@ -47,20 +47,22 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS curriculum (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id         TEXT NOT NULL,
+    class_id        INTEGER DEFAULT NULL,  -- 2026-10-09 加:班级编号 1/2/3, NULL=未分班(适用于不分班的公共课)
     course_name     TEXT NOT NULL,
     teacher         TEXT,
     location        TEXT,
-    day_of_week     INTEGER NOT NULL,  -- 1=周一 ... 7=周日
+    day_of_week     INTEGER NOT NULL,
     start_section   INTEGER NOT NULL,
     end_section     INTEGER NOT NULL,
     start_week      INTEGER NOT NULL DEFAULT 1,
     end_week        INTEGER NOT NULL DEFAULT 20,
-    week_type       TEXT NOT NULL DEFAULT 'every',  -- 'every' / 'odd' / 'even'
+    week_type       TEXT NOT NULL DEFAULT 'every',
     source          TEXT,
     uploaded_at     TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_day ON curriculum(user_id, day_of_week);
+CREATE INDEX IF NOT EXISTS idx_user_class ON curriculum(user_id, class_id);
 """
 
 
@@ -89,16 +91,18 @@ def save_curriculum(
     user_id: str,
     courses: List[Dict],
     source: str = "用户上传",
+    class_id: Optional[int] = None,
 ) -> Dict:
     """
-    批量保存课表条目（清空旧数据后全量替换）
+    批量保存课表条目(清空该用户该班级的旧数据后全量替换)
 
     Args:
         user_id: 用户 UUID
-        courses: List[dict]，每项包含:
+        courses: List[dict],每项包含:
             course_name, teacher, location, day_of_week,
             start_section, end_section, start_week, end_week, week_type
-        source: 课表来源文件名（方便溯源）
+        source: 课表来源文件名(方便溯源)
+        class_id: 班级编号 1/2/3,None 表示不按班级分(全量覆盖)
 
     Returns:
         dict: {"saved": int, "skipped": int, "errors": [...]}
@@ -111,8 +115,11 @@ def save_curriculum(
         conn = init_db(user_id)
         try:
             cur = conn.cursor()
-            # 全量替换：先删旧数据
-            cur.execute("DELETE FROM curriculum WHERE user_id = ?", (user_id,))
+            # 全量替换:先删该班级(或全删)的旧数据
+            if class_id is not None:
+                cur.execute("DELETE FROM curriculum WHERE user_id = ? AND class_id = ?", (user_id, class_id))
+            else:
+                cur.execute("DELETE FROM curriculum WHERE user_id = ? AND class_id IS NULL", (user_id,))
 
             saved = 0
             skipped = 0
@@ -138,14 +145,15 @@ def save_curriculum(
                     cur.execute(
                         """
                         INSERT INTO curriculum
-                          (user_id, course_name, teacher, location,
+                          (user_id, class_id, course_name, teacher, location,
                            day_of_week, start_section, end_section,
                            start_week, end_week, week_type,
                            source, uploaded_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             user_id,
+                            class_id,
                             c.get("course_name", "").strip(),
                             c.get("teacher", "").strip(),
                             c.get("location", "").strip(),
@@ -169,39 +177,58 @@ def save_curriculum(
             conn.close()
 
 
-def load_curriculum(user_id: str) -> List[Dict]:
-    """加载用户全部课表条目，按 day_of_week + start_section 排序"""
+def load_curriculum(user_id: str, class_id: Optional[int] = None) -> List[Dict]:
+    """加载用户课表条目,按 day_of_week + start_section 排序
+
+    Args:
+        user_id: 用户 UUID
+        class_id: 班级编号,None=返回该用户所有(不分班 + 各班)
+    """
     if not user_id:
         return []
     conn = init_db(user_id)
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, course_name, teacher, location,
-                   day_of_week, start_section, end_section,
-                   start_week, end_week, week_type, source, uploaded_at
-            FROM curriculum
-            WHERE user_id = ?
-            ORDER BY day_of_week, start_section
-            """,
-            (user_id,),
-        )
+        if class_id is not None:
+            cur.execute(
+                """
+                SELECT id, class_id, course_name, teacher, location,
+                       day_of_week, start_section, end_section,
+                       start_week, end_week, week_type, source, uploaded_at
+                FROM curriculum
+                WHERE user_id = ? AND (class_id = ? OR class_id IS NULL)
+                ORDER BY day_of_week, start_section
+                """,
+                (user_id, class_id),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, class_id, course_name, teacher, location,
+                       day_of_week, start_section, end_section,
+                       start_week, end_week, week_type, source, uploaded_at
+                FROM curriculum
+                WHERE user_id = ?
+                ORDER BY day_of_week, start_section
+                """,
+                (user_id,),
+            )
         rows = cur.fetchall()
         return [
             {
                 "id": r[0],
-                "course_name": r[1],
-                "teacher": r[2],
-                "location": r[3],
-                "day_of_week": r[4],
-                "start_section": r[5],
-                "end_section": r[6],
-                "start_week": r[7],
-                "end_week": r[8],
-                "week_type": r[9],
-                "source": r[10],
-                "uploaded_at": r[11],
+                "class_id": r[1],
+                "course_name": r[2],
+                "teacher": r[3],
+                "location": r[4],
+                "day_of_week": r[5],
+                "start_section": r[6],
+                "end_section": r[7],
+                "start_week": r[8],
+                "end_week": r[9],
+                "week_type": r[10],
+                "source": r[11],
+                "uploaded_at": r[12],
             }
             for r in rows
         ]
@@ -209,8 +236,100 @@ def load_curriculum(user_id: str) -> List[Dict]:
         conn.close()
 
 
-def clear_curriculum(user_id: str) -> int:
-    """清空用户课表（删除前提醒）"""
+def add_courses(
+    user_id: str,
+    courses: List[Dict],
+    class_id: Optional[int] = None,
+    source: str = "实验课表上传",
+) -> Dict:
+    """**增量**加课表条目(不清空旧的,只追加 + 去重)
+    用于:实验课表合并、群消息识别后入课表。
+    2026-10-09 新增。
+
+    去重策略:同 (day_of_week, start_section, course_name) 视为重复,跳过
+    """
+    if not user_id:
+        return {"saved": 0, "skipped": 0, "duplicated": 0, "errors": []}
+
+    lock = _get_lock(user_id)
+    with lock:
+        conn = init_db(user_id)
+        try:
+            cur = conn.cursor()
+            # 先查已存在 (user_id, class_id, day, start_section, course_name)
+            cur.execute(
+                "SELECT day_of_week, start_section, course_name FROM curriculum "
+                "WHERE user_id = ? AND (class_id = ? OR (? IS NULL AND class_id IS NULL))",
+                (user_id, class_id, class_id),
+            )
+            existing = {
+                (r[0], r[1], r[2]) for r in cur.fetchall()
+            }
+
+            saved = 0
+            skipped = 0
+            duplicated = 0
+            errors = []
+            now = datetime.now().isoformat(timespec="seconds")
+
+            for c in courses:
+                try:
+                    if not c.get("course_name"):
+                        skipped += 1
+                        continue
+                    if not (1 <= c.get("day_of_week", 0) <= 7):
+                        skipped += 1
+                        continue
+                    if not (1 <= c.get("start_section", 0) <= 12):
+                        skipped += 1
+                        continue
+
+                    key = (int(c["day_of_week"]), int(c["start_section"]), c["course_name"].strip())
+                    if key in existing:
+                        duplicated += 1
+                        continue
+
+                    cur.execute(
+                        """
+                        INSERT INTO curriculum
+                          (user_id, class_id, course_name, teacher, location,
+                           day_of_week, start_section, end_section,
+                           start_week, end_week, week_type, source, uploaded_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            class_id,
+                            c.get("course_name", "").strip(),
+                            c.get("teacher", "").strip(),
+                            c.get("location", "").strip(),
+                            int(c["day_of_week"]),
+                            int(c["start_section"]),
+                            int(c.get("end_section", c["start_section"])),
+                            int(c.get("start_week", 1)),
+                            int(c.get("end_week", 20)),
+                            c.get("week_type", "every"),
+                            source,
+                            now,
+                        ),
+                    )
+                    saved += 1
+                except Exception as e:
+                    errors.append({"course": c.get("course_name", "?"), "err": str(e)})
+
+            conn.commit()
+            return {
+                "saved": saved,
+                "skipped": skipped,
+                "duplicated": duplicated,
+                "errors": errors,
+            }
+        finally:
+            conn.close()
+
+
+def clear_curriculum(user_id: str, class_id: Optional[int] = None) -> int:
+    """清空用户课表(可按班级清空)"""
     if not user_id:
         return 0
     lock = _get_lock(user_id)
@@ -218,7 +337,13 @@ def clear_curriculum(user_id: str) -> int:
         conn = init_db(user_id)
         try:
             cur = conn.cursor()
-            cur.execute("DELETE FROM curriculum WHERE user_id = ?", (user_id,))
+            if class_id is not None:
+                cur.execute(
+                    "DELETE FROM curriculum WHERE user_id = ? AND class_id = ?",
+                    (user_id, class_id),
+                )
+            else:
+                cur.execute("DELETE FROM curriculum WHERE user_id = ?", (user_id,))
             conn.commit()
             return cur.rowcount
         finally:
