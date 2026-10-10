@@ -49,4 +49,5 @@ Thumbs.db
 # 临时诊断/调试脚本（命名带 _ 前缀，正式脚本在 scripts/ 下不带前缀）
 scripts/_*.py
 scripts/_*.cjs
+scripts/_diag/      # 调试脚本归类目录(2026-10-10 整理时统一放这里)
 # *
