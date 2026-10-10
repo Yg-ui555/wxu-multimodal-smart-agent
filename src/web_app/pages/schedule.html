@@ -10,17 +10,50 @@
   {% if course_count > 0 %}
     已解析 <b style="color:var(--accent-deep);">{{ course_count }}</b> 节课 · 当前第 <b>{{ current_week }}</b> 周
   {% else %}
-    <b>暂无课表</b>。请前往 <a href="/upload">上传中心</a> 上传 PDF。
+    <b>暂无课表</b>。请先填好下方"开学日"和"班级",然后去 <a href="/upload">上传中心</a> 上传 PDF。
   {% endif %}
 </div>
 
+<!-- 学期设置(2026-10-09 新增):开学日 + 班级,任何时候都能设 -->
+<div class="wxu-card">
+  <div class="wxu-card-eyebrow">学期设置</div>
+  <div class="wxu-card-title" style="margin-bottom:14px;">📅 开学日 & 班级</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
+    <div>
+      <label style="font-size:12px;color:var(--ink-mute);display:block;margin-bottom:4px;">开学日期(本学期第 1 周第一天)</label>
+      <input id="setting-start-date" type="date" value="{{ settings.semester_start_date }}"
+             style="padding:8px 12px;border:1px solid var(--mist);border-radius:6px;font-size:14px;">
+    </div>
+    <div>
+      <label style="font-size:12px;color:var(--ink-mute);display:block;margin-bottom:4px;">班级编号</label>
+      <select id="setting-class-id" style="padding:8px 12px;border:1px solid var(--mist);border-radius:6px;font-size:14px;">
+        <option value="">未设置</option>
+        <option value="1" {% if settings.class_id == 1 %}selected{% endif %}>1 班</option>
+        <option value="2" {% if settings.class_id == 2 %}selected{% endif %}>2 班</option>
+        <option value="3" {% if settings.class_id == 3 %}selected{% endif %}>3 班</option>
+      </select>
+    </div>
+    <div>
+      <label style="font-size:12px;color:var(--ink-mute);display:block;margin-bottom:4px;">班级名(可选)</label>
+      <input id="setting-class-name" type="text" value="{{ settings.class_name or '' }}" placeholder="如 电信2201"
+             style="padding:8px 12px;border:1px solid var(--mist);border-radius:6px;font-size:14px;">
+    </div>
+    <button id="setting-save-btn" class="wxu-btn" style="background:var(--accent-deep);color:#fff;padding:8px 20px;border-radius:6px;border:none;cursor:pointer;font-size:14px;">保存</button>
+  </div>
+  <div id="setting-save-msg" style="margin-top:8px;font-size:12px;color:var(--ink-mute);"></div>
+</div>
+
 {% if course_count > 0 %}
+<!-- 周次选择器 + 周视图(只在有课表时显示) -->
 <div class="wxu-card">
   <div class="wxu-card-eyebrow">切换 · 学期周次</div>
-  <div class="wxu-card-title" style="margin-bottom:14px;">第 {{ current_week }} 周</div>
+  <div class="wxu-card-title" style="margin-bottom:6px;">第 {{ current_week }} 周</div>
+  <div style="font-size:12px;color:var(--accent-deep);margin-bottom:14px;">
+    📍 当前是第 <b>{{ auto_week }}</b> 周(<a href="/schedule" style="color:var(--accent-deep);">回到本周</a>)
+  </div>
   <div class="wxu-week-selector">
     {% for w in range(1, 21) %}
-    <a href="/schedule?week={{ w }}" class="wxu-week-btn {% if w == current_week %}active{% endif %}">W{{ w }}</a>
+    <a href="/schedule?week={{ w }}" class="wxu-week-btn {% if w == current_week %}active{% endif %}{% if w == auto_week and w != current_week %}wxu-week-btn-now{% endif %}">W{{ w }}</a>
     {% endfor %}
   </div>
 </div>
@@ -29,4 +62,41 @@
   {{ week_view|safe }}
 </div>
 {% endif %}
+
+<script>
+  // 2026-10-09 新增:保存学期设置(开学日 + 班级)
+  const saveBtn = document.getElementById('setting-save-btn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      const startDate = document.getElementById('setting-start-date').value;
+      const classId = document.getElementById('setting-class-id').value;
+      const className = document.getElementById('setting-class-name').value;
+      const msgEl = document.getElementById('setting-save-msg');
+      if (!startDate) { msgEl.textContent = '请填开学日期'; msgEl.style.color = '#dc2626'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = '保存中...';
+      try {
+        const r = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            semester_start_date: startDate,
+            class_id: classId ? parseInt(classId) : null,
+            class_name: className || null,
+          }),
+        });
+        const data = await r.json();
+        if (data.ok) {
+          msgEl.textContent = '✅ 已保存,刷新页面生效'; msgEl.style.color = '#16a34a';
+          setTimeout(() => location.reload(), 800);
+        } else {
+          msgEl.textContent = '❌ 保存失败: ' + (data.detail || '未知错误'); msgEl.style.color = '#dc2626';
+        }
+      } catch (e) {
+        msgEl.textContent = '❌ 网络错误: ' + e.message; msgEl.style.color = '#dc2626';
+      } finally {
+        saveBtn.disabled = false; saveBtn.textContent = '保存';
+      }
+    });
+  }
+</script>
 {% endblock %}

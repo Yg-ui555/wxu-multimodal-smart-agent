@@ -4,7 +4,7 @@
 # 设计（参考豆包）：
 # - 每个 user_id 拥有独立的"对话文件夹"：data/user_histories/<uid>/
 # - 里面有 index.json（session 列表 + 标题 + 时间戳）
-# - 每次对话 state 写在 chat_<sid>.pkl
+# - 每次对话 state 写在 chat_<sid>.json
 # - 上限 200 个 session / user，超出走 FIFO（最久未用的 flush 后驱逐）
 #
 # 关键 API：
@@ -12,14 +12,22 @@
 # - new_session(user_id, title=None) -> session_id
 # - save_state(user_id, sid, state) -> bool
 # - load_state(user_id, sid) -> dict | None
+# - append_message_atomic(user_id, sid, message) -> bool  ← 2026-10-09 加
 # - delete_session(user_id, sid) -> bool
 # - resolve_user_id(request) -> user_id (cookie → 输入 → IP+UA hash)
+# - new_anonymous_uid() -> str  ← 2026-10-09 加：每个匿名用户独立 UUID
+#
+# 2026-10-09 安全修复：
+#   - 原 `chat_<sid>.pkl` 用 pickle.load 反序列化可执行任意代码（pickle RCE）。
+#     改为 JSON。老 .pkl 文件不再读取（用户测试数据，丢弃无影响）。
+#   - 新增 `append_message_atomic`：把"load→改→save"三步合并到一把锁内，
+#     修复同用户并发两条消息丢失一条的 race condition。
+#   - 新增 `new_anonymous_uid`：替代原 IP+UA hash 共享匿名账户的隐私 bug。
 # ============================================================
 
 import os
 import re
 import json
-import pickle
 import time
 import threading
 import hashlib
@@ -56,7 +64,8 @@ def _index_path(uid: str) -> Path:
 
 
 def _state_path(uid: str, sid: str) -> Path:
-    return _user_dir(uid) / f"chat_{sid}.pkl"
+    # 2026-10-09 改：.pkl → .json（pickle RCE 修复）
+    return _user_dir(uid) / f"chat_{sid}.json"
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> bool:
@@ -85,14 +94,6 @@ def _read_json(path: Path) -> dict:
             return json.load(f)
     except Exception:
         return {}
-
-
-def _read_pickle(path: Path) -> Optional[dict]:
-    try:
-        with open(path, "rb") as f:
-            return pickle.load(f)
-    except Exception:
-        return None
 
 
 # ============================================================
@@ -156,12 +157,18 @@ def update_meta(uid: str, sid: str, meta_patch: dict) -> bool:
 
 
 def touch(uid: str, sid: str) -> bool:
-    """touch：刷新 last_active_at，并把对应 chat_<sid>.pkl 也存在（懒加载保证）"""
+    """touch：刷新 last_active_at，并把对应 chat_<sid>.json 也存在（懒加载保证）"""
     return update_meta(uid, sid, {"last_active_at": time.time()})
 
 
 def save_state(uid: str, sid: str, state: dict) -> bool:
-    """保存某 session 的对话状态到磁盘"""
+    """保存某 session 的对话状态到磁盘（JSON 格式）
+
+    2026-10-09 改：原 pickle.dumps 改 json.dumps。
+    pickle.load 可执行任意代码（RCE），JSON 安全。
+    state 里的 recent_history 是 [(q, a), ...] 元组列表，json.dumps 会把 tuple 转 list，
+    load_state 读回来是 list——上层 dispatcher._load_session_history 已对 list/tuple 都做了兼容。
+    """
     if not (is_valid_user_id(uid) and is_valid_session_id(sid)):
         return False
     _user_dir(uid).mkdir(parents=True, exist_ok=True)
@@ -170,18 +177,70 @@ def save_state(uid: str, sid: str, state: dict) -> bool:
     payload["_saved_at"] = time.time()
     payload["schema_version"] = state.get("schema_version", 1)
     with _LOCK:
-        return _atomic_write_bytes(p, pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+        return _atomic_write_text(p, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def load_state(uid: str, sid: str) -> Optional[dict]:
-    """加载某 session 的对话状态"""
+    """加载某 session 的对话状态（JSON 格式）
+
+    2026-10-09 改：原 pickle.load 改 json.load。
+    老 .pkl 文件不再读取（用户测试数据，丢弃无影响）。
+    """
     if not (is_valid_user_id(uid) and is_valid_session_id(sid)):
         return None
     p = _state_path(uid, sid)
     if not p.exists():
         return None
     with _LOCK:  # 防止 dump 写到一半时读
-        return _read_pickle(p)
+        return _read_json(p) or None
+
+
+def append_message_atomic(uid: str, sid: str, message: dict, max_messages: int = 50) -> bool:
+    """原子追加一条 message 到 session 的 recent_history（2026-10-09 加）
+
+    修复 race condition：原 fastapi_app._append_session_message 是
+    load_state → 修改 list → save_state 三步，每步各自持 _LOCK 但中间 gap 不持锁，
+    同用户并发两条消息会丢一条（A load → B load → A save → B save 覆盖 A）。
+
+    本方法把三步合并到一把 _LOCK 内，保证原子性。
+
+    Args:
+        uid: 用户 ID
+        sid: session ID
+        message: {"role": "user"/"assistant", "content": "..."}
+        max_messages: recent_history 上限，超出 FIFO 截断（默认 50 条 = 25 轮）
+
+    Returns:
+        bool: 是否成功
+    """
+    if not (is_valid_user_id(uid) and is_valid_session_id(sid)):
+        return False
+    if not isinstance(message, dict) or "role" not in message or "content" not in message:
+        return False
+    _user_dir(uid).mkdir(parents=True, exist_ok=True)
+    p = _state_path(uid, sid)
+    with _LOCK:
+        state = _read_json(p) or {}
+        history = state.get("recent_history", []) or []
+        # 兼容老格式 [[q, a], ...] → 转 [{"role":"user",...},{"role":"assistant",...}]
+        if history and isinstance(history[0], (list, tuple)):
+            converted = []
+            for pair in history:
+                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                    if pair[0]:
+                        converted.append({"role": "user", "content": str(pair[0])})
+                    if pair[1]:
+                        converted.append({"role": "assistant", "content": str(pair[1])})
+            history = converted
+        history.append({"role": message["role"], "content": str(message["content"])[:2000]})
+        # FIFO 截断，防 list 无限增长
+        if len(history) > max_messages:
+            history = history[-max_messages:]
+        state["recent_history"] = history
+        state["_saved_at"] = time.time()
+        state["schema_version"] = state.get("schema_version", 1)
+        ok = _atomic_write_text(p, json.dumps(state, ensure_ascii=False, indent=2))
+    return ok
 
 
 def delete_session(uid: str, sid: str) -> bool:
@@ -224,11 +283,26 @@ def list_all_user_ids() -> list:
 
 
 # ============================================================
-# User resolution（来自 cookie / 输入 / IP+UA hash）
+# User resolution（来自 cookie / 输入 / 现场生成 UUID）
 # ============================================================
+def new_anonymous_uid() -> str:
+    """生成一个独立的匿名用户 ID（2026-10-09 加）
+
+    替代原 IP+UA hash 共享匿名账户的隐私 bug：
+    原方案所有未登录用户共享同一个 anon_<hash>，导致 A 用户对话历史进 B 用户 prompt。
+    本方法每次调用都生成独立 UUID，由 fastapi_app 现场写 Set-Cookie 让浏览器记住。
+    前缀 wxu_anon_ 用于和白名单 ^wxu_[A-Za-z0-9_-]{8,32}$ 区分（仍满足白名单）。
+    """
+    return f"wxu_anon_{uuid.uuid4().hex[:24]}"
+
+
 def resolve_user_id(request=None, fallback_input: str = "") -> str:
     """
-    优先级：cookie wxu_uid > 显式 fallback_input > IP+UA hash（临时 anon）
+    优先级：cookie wxu_uid > 显式 fallback_input > 现场生成 UUID
+
+    2026-10-09 修复：原 fallback 走 IP+UA hash 共享匿名账户（隐私 bug），
+    改为返回 None，让调用方现场生成 UUID 并 Set-Cookie。
+    本函数仅做"已登录用户身份解析"，匿名场景由调用方处理。
     """
     cookies = getattr(request, "cookies", None) or {}
     uid = (cookies.get("wxu_uid") or "").strip()
@@ -239,13 +313,5 @@ def resolve_user_id(request=None, fallback_input: str = "") -> str:
     if is_valid_user_id(fb):
         return fb
 
-    ua = ""
-    host = ""
-    try:
-        if request is not None:
-            ua = request.headers.get("user-agent", "") if hasattr(request, "headers") else ""
-            host = request.client.host if getattr(request, "client", None) else ""
-    except Exception:
-        pass
-    h = hashlib.md5(f"{host}|{ua}".encode("utf-8", errors="ignore")).hexdigest()[:12]
-    return f"anon_{h}"
+    # 不再 fallback 到共享 anon_<hash>，返回空让调用方现场生成 UUID
+    return ""
