@@ -20,6 +20,6 @@
     Gradio HTML 周视图（周一-周日 × 第 1-12 节）
 """
 
-from . import db, parser, ui
+from . import db, parser, ui, week, settings, experiment_parser
 
-__all__ = ["db", "parser", "ui"]
+__all__ = ["db", "parser", "ui", "week", "settings", "experiment_parser"]
