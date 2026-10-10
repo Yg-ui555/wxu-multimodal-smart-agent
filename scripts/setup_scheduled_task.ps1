@@ -46,8 +46,8 @@ $action = New-ScheduledTaskAction `
     -Argument "scripts/daily_crawl.py --once" `
     -WorkingDirectory $ProjectRoot
 
-# Trigger: daily at 18:00
-$trigger = New-ScheduledTaskTrigger -Daily -At 6pm
+# Trigger: daily at 06:00 (6am)
+$trigger = New-ScheduledTaskTrigger -Daily -At 6am
 
 # Settings: catch-up after boot + retry 3 times + 1h timeout + battery-friendly
 $settings = New-ScheduledTaskSettingsSet `
@@ -84,7 +84,7 @@ Write-Host "Task name:    WXU_DailyCrawl_0600" -ForegroundColor Cyan
 Write-Host "Trigger:      daily at 18:00 (6 PM)" -ForegroundColor Cyan
 Write-Host "Command:      pythonw.exe scripts/daily_crawl.py --once" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Catch-up:     if PC off at 6 PM, runs once after next boot" -ForegroundColor Yellow
+Write-Host "Catch-up:     if PC off at 6 AM, runs once after next boot" -ForegroundColor Yellow
 Write-Host "Retry:        3 retries, 30 min interval on failure" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "View task:    schtasks /query /tn WXU_DailyCrawl_0600 /v" -ForegroundColor Gray
