@@ -94,8 +94,38 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "pages"
 STATIC_DIR = PROJECT_ROOT / "static"
 
 # 后台任务状态：task_id → 结果（线程安全）
+# 2026-10-09 修复：原 `_task_results` 全局 dict 永不清理，长时间运行会内存泄漏。
+# 改加 TTL（1 小时）+ 条目上限（1000），溢出时清最老的。
 _task_results: Dict[str, Dict] = {}
 _task_lock = threading.Lock()
+_TASK_TTL_SECONDS = 3600  # 1 小时
+_TASK_MAX_ENTRIES = 1000
+
+
+def _task_set(task_id: str, payload: Dict) -> None:
+    """记录后台任务结果，自动 TTL + 容量上限"""
+    import time as _t
+    now = _t.time()
+    with _task_lock:
+        # 清理过期
+        if len(_task_results) > _TASK_MAX_ENTRIES // 2:
+            for tid in list(_task_results.keys()):
+                if now - _task_results[tid].get("_ts", 0) > _TASK_TTL_SECONDS:
+                    _task_results.pop(tid, None)
+        _task_results[task_id] = {**payload, "_ts": now}
+
+
+def _task_get(task_id: str) -> Optional[Dict]:
+    """读取后台任务结果，过期返回 None"""
+    import time as _t
+    with _task_lock:
+        v = _task_results.get(task_id)
+        if v is None:
+            return None
+        if _t.time() - v.get("_ts", 0) > _TASK_TTL_SECONDS:
+            _task_results.pop(task_id, None)
+            return None
+        return {k: val for k, val in v.items() if k != "_ts"}
 
 
 # ============================================================
@@ -116,14 +146,25 @@ log.info("FastAPI 应用初始化完成")
 
 def _ensure_uid(request: Request) -> tuple[str, bool]:
     """
-    从 cookie 拿 uid，没有则创建。返回 (uid, is_new)
-    set_cookie 放到路由里，response 对象构造之后再写
+    从 cookie 拿 uid，没有或不合法则现场生成匿名 UUID。
+
+    2026-10-09 修复：
+      1. 原 `request.cookies.get("wxu_uid", "")` 拿到值不校验，攻击者可伪造
+         `wxu_uid=../../etc/passwd` 做路径穿越。现在强制过 `is_valid_user_id` 白名单。
+      2. 原匿名 fallback `str(uuid.uuid4())` 改用 `user_store.new_anonymous_uid()`，
+         生成 `wxu_anon_<24hex>` 形式，便于区分匿名用户（仍满足白名单）。
+      3. 原 fallback 走 user_store.resolve_user_id 的 IP+UA hash 共享匿名账户
+         （A 用户对话历史进 B 用户 prompt 的隐私 bug），改为每用户独立 UUID。
+
+    返回 (uid, is_new)：is_new=True 表示新生成的匿名 uid，需要 Set-Cookie。
     """
-    uid = request.cookies.get("wxu_uid", "")
-    if not uid:
-        uid = str(uuid.uuid4())
-        return uid, True
-    return uid, False
+    from src.web_app import user_store
+    uid = (request.cookies.get("wxu_uid") or "").strip()
+    if uid and user_store.is_valid_user_id(uid):
+        return uid, False
+    # cookie 不存在或不合法 → 现场生成独立匿名 UUID
+    uid = user_store.new_anonymous_uid()
+    return uid, True
 
 
 def _attach_uid_cookie(response, uid: str) -> None:
@@ -168,38 +209,23 @@ def _attach_sid_cookie(response, sid: str) -> None:
 
 
 def _append_session_message(uid: str, sid: str, role: str, content: str):
-    """往某 session 的 recent_history 追加一条消息 + 同步更新 index.json 元数据
+    """往某 session 的 recent_history 原子追加一条消息 + 同步更新 index.json 元数据
 
     消息格式:[{"role":"user/assistant","content":"..."}, ...]
+
+    2026-10-09 修复：原实现是 `load_state → 修改 list → save_state` 三步，
+    每步各自持 user_store._LOCK 但中间 gap 不持锁——同用户并发两条消息会丢一条
+    （A load → B load → A save → B save 覆盖 A）。
+    改用 user_store.append_message_atomic：把三步合并到一把 _LOCK 内，保证原子性。
     """
     from src.web_app import user_store
-    state = user_store.load_state(uid, sid) or {}
-    history = state.get("recent_history", []) or []
-    # 兼容老 tuple 格式,统一转 list of dict
-    if history and isinstance(history[0], (list, tuple)):
-        converted = []
-        for pair in history:
-            if isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                q, a = pair[0], pair[1]
-                if q:
-                    converted.append({"role": "user", "content": str(q)})
-                if a:
-                    converted.append({"role": "assistant", "content": str(a)})
-        history = converted
-    elif not all(isinstance(h, dict) for h in history):
-        history = []
-
-    history.append({"role": role, "content": str(content)})
-    # 单 session 上限 200 条(防 disk 膨胀)
-    if len(history) > 200:
-        history = history[-200:]
-
-    state["recent_history"] = history
-    state["schema_version"] = state.get("schema_version", 1)
-    user_store.save_state(uid, sid, state)
+    # 原子追加（load→改→save 一把锁内完成）
+    user_store.append_message_atomic(uid, sid, {"role": role, "content": content}, max_messages=200)
 
     # 同步更新 index.json:msg_count + last_active_at + preview + 自动标题(首条 user)
-    msg_count = len([h for h in history if h.get("role") == "user"])
+    state = user_store.load_state(uid, sid) or {}
+    history = state.get("recent_history", []) or []
+    msg_count = len([h for h in history if isinstance(h, dict) and h.get("role") == "user"])
     preview = (str(content)[:30] + "…") if len(str(content)) > 30 else str(content)
     user_store.touch(uid, sid)
     user_store.update_meta(uid, sid, {"msg_count": msg_count, "preview": preview})
@@ -285,18 +311,73 @@ async def index(request: Request):
 
 @app.get("/schedule", response_class=HTMLResponse)
 async def schedule(request: Request, week: int = 1):
-    """课表页（周视图渲染）"""
+    """课表页（周视图渲染）
+
+    2026-10-09 改造:
+        - 不传 week 参数时,根据用户开学日自动算 current_week
+        - 传了 week 参数(用户点 W1-W20)就用用户选的
+        - 把 settings 也传给模板,前端可以显示 + 修改
+    """
+    from src.curriculum.settings import get_settings
+    from src.curriculum.week import compute_current_week
+
     uid, is_new = _ensure_uid(request)
     courses = cv_db.load_curriculum(uid)
-    week_view_html = cv_ui.render_week_view(courses, current_week=week) if courses else cv_ui.render_empty_view()
+    settings = get_settings(uid)
+    # 自动算当前周(只有用户没显式传 ?week=N 时才用)
+    auto_week = compute_current_week(settings["semester_start_date"])
+    # 关键判断:用户主动选了周次就尊重用户选择
+    user_picked = "week" in str(request.url)
+    effective_week = week if user_picked else auto_week
+    week_view_html = cv_ui.render_week_view(courses, current_week=effective_week) if courses else cv_ui.render_empty_view()
     response = templates.TemplateResponse(request, "schedule.html", {
         "week_view": week_view_html,
         "course_count": len(courses),
-        "current_week": week,
+        "current_week": effective_week,
+        "auto_week": auto_week,           # 给前端高亮"当前周"用
+        "settings": settings,              # 开学日期 + 班级
     })
     if is_new:
         _attach_uid_cookie(response, uid)
     return response
+
+
+# === 用户设置 API(2026-10-09 新增) ===
+@app.get("/api/settings")
+async def api_get_settings(request: Request):
+    """读当前用户设置(开学日期 + 班级)"""
+    from src.curriculum.settings import get_settings
+    uid, _ = _ensure_uid(request)
+    return get_settings(uid)
+
+
+@app.post("/api/settings")
+async def api_save_settings(request: Request):
+    """保存用户设置(开学日期 + 班级)
+
+    body: {"semester_start_date": "2026-09-01", "class_id": 2, "class_name": "电信2201"}
+    """
+    from src.curriculum.settings import save_settings
+    uid, _ = _ensure_uid(request)
+    body = await request.json()
+    start_date = (body.get("semester_start_date") or "").strip()
+    class_id = body.get("class_id")
+    class_name = (body.get("class_name") or "").strip() or None
+
+    if not start_date:
+        raise HTTPException(status_code=400, detail="semester_start_date 不能为空")
+
+    ok = save_settings(
+        uid,
+        semester_start_date=start_date,
+        class_id=int(class_id) if class_id else None,
+        class_name=class_name,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="日期格式错误,应该是 YYYY-MM-DD")
+
+    log.info("用户设置已保存 uid=%s start=%s class=%s", uid[:8], start_date, class_name)
+    return {"ok": True}
 
 
 @app.get("/scholarship")
@@ -403,58 +484,152 @@ async def health():
 
 @app.get("/api/schedule")
 async def api_schedule(request: Request, week: int = 1):
-    """获取当前用户课表 JSON"""
+    """获取当前用户课表 JSON
+
+    会从 user_settings 读取用户的 class_id,用 cv_db.load_curriculum(class_id)
+    过滤(公共课(class_id IS NULL) + 我的班级两桶合并返回)。
+    若用户未设置 class_id,返回该用户全部(向后兼容)。
+    """
+    from src.curriculum.settings import get_settings  # 局部导入避免循环
+
     uid = request.cookies.get("wxu_uid", "anonymous")
-    courses = cv_db.load_curriculum(uid)
-    return {"courses": courses, "count": len(courses), "current_week": week}
+    settings = get_settings(uid)
+    user_class_id = settings.get("class_id")
+    # load_curriculum(class_id=X) -> X 的课 + 公共课(NULL) 都返回
+    courses = cv_db.load_curriculum(uid, class_id=user_class_id)
+    return {
+        "courses": courses,
+        "count": len(courses),
+        "current_week": week,
+        "user_class_id": user_class_id,
+        "user_class_name": settings.get("class_name"),
+    }
 
 
 # ---- 后台任务处理函数 ----
-def _parse_pdf_task(task_id: str, uid: str, tmp_path: str, filename: str, kind: str):
-    """后台解析 PDF（课表 or 通用文档），结果写 _task_results"""
+def _parse_pdf_task(
+    task_id: str,
+    uid: str,
+    tmp_path: str,
+    filename: str,
+    kind: str,
+    class_id: Optional[int] = None,
+):
+    """后台解析 PDF（课表 or 通用文档），结果写 _task_results
+
+    Args:
+        class_id: 仅 kind="schedule" 生效。把 PDF 课表灌到对应班级桶。
+                  None=不按班级分的公共课桶(此时 clear_curriculum 也只清 NULL)
+    """
     try:
-        log.info("后台任务开始 task=%s kind=%s file=%s", task_id[:8], kind, filename)
+        log.info("后台任务开始 task=%s kind=%s class_id=%s file=%s",
+                 task_id[:8], kind, class_id, filename)
         if kind == "schedule":
             result = parse_uploaded_file(tmp_path)
             courses = result["parsed"]
             if courses:
-                cv_db.clear_curriculum(uid)
-                cv_db.save_curriculum(uid, courses, source=filename)
-            with _task_lock:
-                _task_results[task_id] = {
-                    "status": "done",
-                    "kind": "schedule",
-                    "parsed": len(courses),
-                    "parse_rate": result["stats"]["parse_rate"],
-                    "parse_method": result["parse_method"],
-                    "finished_at": datetime.now().isoformat(),
-                }
+                # 同班级覆盖更新(只删 class_id 一致的旧数据,公共课不会被误删)
+                cv_db.clear_curriculum(uid, class_id=class_id)
+                cv_db.save_curriculum(uid, courses, class_id=class_id, source=filename)
+            _task_set(task_id, {
+                "status": "done",
+                "kind": "schedule",
+                "parsed": len(courses),
+                "parse_rate": result["stats"]["parse_rate"],
+                "parse_method": result["parse_method"],
+                "finished_at": datetime.now().isoformat(),
+            })
             log.info("课表解析完成 task=%s parsed=%d", task_id[:8], len(courses))
         else:
             # 通用文档上传 → 入向量库
             from src.web_app.upload_handler import process_uploads
             res = process_uploads([tmp_path], category="用户上传")
-            with _task_lock:
-                _task_results[task_id] = {
-                    "status": "done",
-                    "kind": "document",
-                    "uploaded": res["uploaded"],
-                    "chunks_added": res["chunks_added"],
-                    "status_code": res["status"],
-                    "message": res["message_md"][:500],
-                    "finished_at": datetime.now().isoformat(),
-                }
+            _task_set(task_id, {
+                "status": "done",
+                "kind": "document",
+                "uploaded": res["uploaded"],
+                "chunks_added": res["chunks_added"],
+                "status_code": res["status"],
+                "message": res["message_md"][:500],
+                "finished_at": datetime.now().isoformat(),
+            })
             log.info("文档入库完成 task=%s chunks=%d", task_id[:8], res["chunks_added"])
     except Exception as e:
         log.exception("后台任务失败 task=%s", task_id[:8])
-        with _task_lock:
-            _task_results[task_id] = {
-                "status": "error",
-                "error": str(e),
-                "finished_at": datetime.now().isoformat(),
-            }
+        _task_set(task_id, {
+            "status": "error",
+            "error": str(e),
+            "finished_at": datetime.now().isoformat(),
+        })
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+
+# ===== 实验课表上传接口(2026-10-09 新增) =====
+@app.post("/api/upload/experiment_table")
+async def api_upload_experiment_table(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+):
+    """上传实验课表(Excel/CSV/截图),系统按用户班级自动过滤 + 增量入课表
+
+    流程:
+        1. 保存到临时文件
+        2. 后台解析(Excel 直接读 / CSV 直接读 / 截图走 OCR)
+        3. 按 user_settings.class_name 过滤"我的班级"行
+        4. 调用 db.add_courses 增量入课表(不去重旧数据)
+    """
+    from src.curriculum.experiment_parser import parse_experiment_table
+    from src.curriculum.settings import get_settings
+
+    uid, _ = _ensure_uid(request)
+    settings = get_settings(uid)
+    user_class = settings.get("class_name") or ""
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="未选择文件")
+
+    # 保存到临时文件
+    content = await file.read()
+    suffix = Path(file.filename).suffix
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp.write(content)
+    tmp.close()
+
+    task_id = str(uuid.uuid4())
+    _task_set(task_id, {"status": "pending", "kind": "experiment", "filename": file.filename})
+
+    def _run():
+        try:
+            log.info("实验课表解析开始 task=%s file=%s", task_id[:8], file.filename)
+            courses = parse_experiment_table(tmp.name, user_class=user_class)
+            result = cv_db.add_courses(uid, courses, class_id=settings.get("class_id"), source=f"实验课表:{file.filename}")
+            _task_set(task_id, {
+                "status": "done",
+                "kind": "experiment",
+                "filename": file.filename,
+                "user_class": user_class,
+                "saved": result["saved"],
+                "duplicated": result["duplicated"],
+                "skipped": result["skipped"],
+                "finished_at": datetime.now().isoformat(),
+            })
+            log.info("实验课表入库完成 task=%s saved=%d dup=%d", task_id[:8], result["saved"], result["duplicated"])
+        except Exception as e:
+            log.exception("实验课表入库失败 task=%s", task_id[:8])
+            _task_set(task_id, {
+                "status": "error",
+                "kind": "experiment",
+                "error": str(e),
+                "finished_at": datetime.now().isoformat(),
+            })
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+
+    background_tasks.add_task(_run)
+    memory.save(uid, "user", f"上传实验课表:{file.filename}", intent="schedule_upload")
+    return {"task_id": task_id, "filename": file.filename, "user_class": user_class}
 
 
 @app.post("/api/schedule/upload")
@@ -463,10 +638,21 @@ async def api_schedule_upload(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
 ):
-    """上传 PDF 解析课表（BackgroundTasks 异步，1 秒内返回 task_id）"""
+    """上传 PDF 解析课表（BackgroundTasks 异步，1 秒内返回 task_id）
+
+    class_id 注入逻辑：PDF 课表按用户当前 settings 的班级归类。
+    若用户未设置 class_id(class_id=None),则归到"未分班"公共课桶,
+    与实验课(add_courses)之间互不干扰。
+    """
+    from src.curriculum.settings import get_settings  # 局部导入避免循环
+
     uid = request.cookies.get("wxu_uid", "")
     if not uid:
         raise HTTPException(status_code=401, detail="No user cookie")
+
+    # 拿 settings 里的 class_id,决定 PDF 课表归到哪个桶
+    user_settings = get_settings(uid)
+    class_id = user_settings.get("class_id")
 
     content = await file.read()
     tmp = tempfile.NamedTemporaryFile(
@@ -475,13 +661,13 @@ async def api_schedule_upload(
     tmp.write(content)
     tmp.close()
     task_id = str(uuid.uuid4())
-    with _task_lock:
-        _task_results[task_id] = {"status": "pending", "kind": "schedule", "filename": file.filename}
+    _task_set(task_id, {"status": "pending", "kind": "schedule", "filename": file.filename})
     # 丢后台解析（立即返回）
-    background_tasks.add_task(_parse_pdf_task, task_id, uid, tmp.name, file.filename, "schedule")
+    background_tasks.add_task(_parse_pdf_task, task_id, uid, tmp.name, file.filename, "schedule", class_id)
     memory.save(uid, "user", f"上传课表:{file.filename}", intent="schedule_upload")
-    log.info("课表上传已入队 task=%s uid=%s file=%s size=%d", task_id[:8], uid[:8], file.filename, len(content))
-    return {"task_id": task_id, "filename": file.filename, "size": len(content)}
+    log.info("课表上传已入队 task=%s uid=%s class_id=%s file=%s size=%d",
+             task_id[:8], uid[:8], class_id, file.filename, len(content))
+    return {"task_id": task_id, "filename": file.filename, "size": len(content), "class_id": class_id}
 
 
 @app.post("/api/upload/document")
@@ -502,8 +688,7 @@ async def api_upload_document(
     tmp.write(content)
     tmp.close()
     task_id = str(uuid.uuid4())
-    with _task_lock:
-        _task_results[task_id] = {"status": "pending", "kind": "document", "filename": file.filename}
+    _task_set(task_id, {"status": "pending", "kind": "document", "filename": file.filename})
     background_tasks.add_task(_parse_pdf_task, task_id, uid, tmp.name, file.filename, "document")
     memory.save(uid, "user", f"上传文档:{file.filename}", intent="general")
     log.info("文档上传已入队 task=%s uid=%s file=%s size=%d", task_id[:8], uid[:8], file.filename, len(content))
@@ -513,10 +698,9 @@ async def api_upload_document(
 @app.get("/api/upload/status/{task_id}")
 async def api_upload_status(task_id: str):
     """查询后台任务状态"""
-    with _task_lock:
-        result = _task_results.get(task_id)
+    result = _task_get(task_id)
     if not result:
-        raise HTTPException(status_code=404, detail="task not found")
+        raise HTTPException(status_code=404, detail="task not found or expired")
     return result
 
 
@@ -640,7 +824,11 @@ async def api_chat(request: Request):
     """
     body = await request.json()
     query = body.get("query", "").strip()
-    uid = request.cookies.get("wxu_uid", "anonymous")
+    # 2026-10-09 修复：原 `request.cookies.get("wxu_uid", "anonymous")` 让所有未登录用户
+    # 共享同一个 anonymous 账户，A 用户对话历史会进 B 用户 prompt（隐私泄露）。
+    # 改用 _ensure_uid：cookie 不存在或不合法时现场生成独立 UUID，
+    # 由后续 _attach_uid_cookie + _attach_sid_cookie 写回浏览器。
+    uid, is_new = _ensure_uid(request)
     if not query:
         raise HTTPException(status_code=400, detail="query required")
 
@@ -679,26 +867,23 @@ async def api_chat(request: Request):
             memory.save(uid, "assistant", answer, intent=intent)
             _append_session_message(uid, sid, "assistant", answer)
         else:
-            # RAG 路径:真正流式 + 喂当前 session 的多轮历史
-            for chunk in dispatcher._rag_answer_stream(query, uid, sid=sid):
-                if chunk.startswith("<<WXU_DOCS_b3f9a2e1>>:"):
-                    sources_json = chunk[len("<<WXU_DOCS_b3f9a2e1>>:"):]
-                    try:
-                        sources = json.loads(sources_json)
-                    except Exception:
-                        sources = []
-                    yield f"data: {json.dumps({'sources': sources, 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
-                else:
-                    accumulated.append(chunk)
-                    yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+            # 2026-10-09 升级:走 ReAct Agent 路径(LLM 自主决定调哪个 tool)
+            # agent_stream 内部会流式 yield 文本 + "[🔧 正在调 XX]" 工具调用提示
+            for chunk in dispatcher.handle_agent_stream(query, uid, intent, sid=sid):
+                accumulated.append(chunk)
+                yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
             assistant_text = "".join(accumulated)
             memory.save(uid, "assistant", assistant_text, intent=intent)
             _append_session_message(uid, sid, "assistant", assistant_text)
-            log.info("chat 流式完成 uid=%s sid=%s intent=%s 答案长=%d", uid[:8], sid[:8], intent, len(assistant_text))
+            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
+            log.info("chat ReAct 流式完成 uid=%s sid=%s intent=%s 答案长=%d", uid[:8], sid[:8], intent, len(assistant_text))
         yield "data: [DONE]\n\n"
 
     response = StreamingResponse(event_stream(), media_type="text/event-stream")
     # 把当前 sid 写回 cookie(首次会话/换 sid 时需要)
+    # 2026-10-09 加：is_new=True 时也写 uid cookie（首次访问的匿名用户）
+    if is_new:
+        _attach_uid_cookie(response, uid)
     _attach_sid_cookie(response, sid)
     return response
 
@@ -706,7 +891,8 @@ async def api_chat(request: Request):
 @app.get("/api/recommend")
 async def api_recommend(request: Request):
     """个性化推荐"""
-    uid = request.cookies.get("wxu_uid", "anonymous")
+    # 2026-10-09 修复：原 "anonymous" 让所有未登录用户共享同一份推荐
+    uid, _ = _ensure_uid(request)
     return {"recommend": _get_recommend(uid)}
 
 

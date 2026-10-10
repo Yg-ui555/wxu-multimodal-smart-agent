@@ -18,6 +18,7 @@
 
 import re
 import logging
+import threading
 from typing import Dict, Optional
 
 from . import memory
@@ -47,17 +48,17 @@ def _extract_preferences(query: str, uid: str) -> Optional[str]:
 
 # ============== RAG 单例（懒加载） ==============
 _rag_instance = None
-_rag_init_lock = None
+# 2026-10-09 修复：原 _rag_init_lock = None + 延迟建锁是"破版双检锁"——
+# 多线程同时撞到 `if _rag_init_lock is None` 时会各自创建一把锁，双检失效。
+# 正解：模块级直接实例化 Lock，import 时就是单例。
+_rag_init_lock = threading.Lock()
 
 
 def _get_rag():
     """懒加载 RAGApp 单例（首次调用才初始化向量库/reranker）"""
-    global _rag_instance, _rag_init_lock
+    global _rag_instance
     if _rag_instance is not None:
         return _rag_instance
-    import threading
-    if _rag_init_lock is None:
-        _rag_init_lock = threading.Lock()
     with _rag_init_lock:
         if _rag_instance is not None:
             return _rag_instance
@@ -211,59 +212,105 @@ def _format_schedule(uid: str, query: str) -> Dict:
 
 
 # ============== 各意图处理函数 ==============
-def handle_schedule(query: str, uid: str, intent: str) -> Dict:
+# 2026-10-09 修复：所有 handler 加 sid 参数，透传给 _rag_answer，
+# 否则 _load_session_history(uid, "") 永远返回空，多轮上下文失效。
+def handle_schedule(query: str, uid: str, intent: str, sid: str = "") -> Dict:
     return _format_schedule(uid, query)
 
 
-def handle_schedule_upload(query: str, uid: str, intent: str) -> Dict:
+def handle_schedule_upload(query: str, uid: str, intent: str, sid: str = "") -> Dict:
     return {
         "answer": "📤 上传课表请去「上传中心」页面，选 PDF 文件即可，我会自动解析存进你的课表。",
         "sources": [],
     }
 
 
-def handle_image_ocr(query: str, uid: str, intent: str) -> Dict:
+def handle_image_ocr(query: str, uid: str, intent: str, sid: str = "") -> Dict:
     return {
         "answer": "🖼️ 识别图片请去「上传中心」上传图片，我会用 OCR 提取文字 + 用视觉模型识别物体。",
         "sources": [],
     }
 
 
-def handle_rag(query: str, uid: str, intent: str) -> Dict:
-    return _rag_answer(query, uid)
+# 2026-10-09 新增:真 Agent 入口(ReAct loop + 4 个 tool)
+# 替代原来的 handle_rag / handle_general,所有非 shortcut 意图全部走这里
+def handle_agent(query: str, uid: str, intent: str, sid: str = "") -> Dict:
+    """ReAct Agent 入口(非流式)。
+
+    1. 任何用户问句(闲聊 / RAG / 知识查询)都让 LLM 自己决定要不要调 tool
+    2. 闲聊("你好"等) LLM 不会调 tool,直接答(0 额外开销)
+    3. 隐含意图 LLM 自己推断,不用 if-else 关键词路由
+    """
+    from src.agent.react_engine import agent_run
+
+    # 1. 先抽偏好(保持原有"我叫 XX"逻辑,不依赖 LLM 也能存)
+    _extract_preferences(query, uid)
+
+    # 2. 加载多轮历史
+    history = _load_session_history(uid, sid) if sid else []
+
+    # 3. 跑 ReAct loop
+    result = agent_run(
+        user_query=query,
+        history=history,
+        uid=uid,
+        max_iter=5,
+    )
+
+    return {
+        "answer": result["answer"],
+        "sources": [],   # ReAct 模式下来源由 tool 决定,前端不强求
+        "tool_calls": result["tool_calls_log"],   # 新增:给前端展示"AI 调了啥 tool"
+        "iterations": result["iterations"],
+    }
 
 
-def handle_general(query: str, uid: str, intent: str) -> Dict:
-    # 先看是不是在自我介绍（存偏好）
-    name = _extract_preferences(query, uid)
-    if name:
-        return {
-            "answer": f"你好，{name}！记住啦，以后都这么叫你。有什么想问的尽管说～",
-            "sources": [],
-        }
-    # 闲聊 fallback
-    if query in ("你好", "hi", "hello", "在吗", "在不在"):
-        prefs = memory.get_all_preferences(uid)
-        n = prefs.get("name")
-        return {"answer": f"你好{n}！我是无锡学院智能助手，可以问我课表、奖学金、食堂、图书馆这些。" if n else "你好！我是无锡学院智能助手，可以问我课表、奖学金、食堂、图书馆这些。", "sources": []}
-    return _rag_answer(query, uid)
+def handle_agent_stream(query: str, uid: str, intent: str, sid: str = "",
+                        image_path: str = ""):
+    """ReAct Agent 流式入口(给 fastapi_app.py 的 SSE 用)。
+
+    Yields:
+        str: 增量文本(LLM token + 工具调用提示)
+    """
+    from src.agent.react_engine import agent_stream
+
+    _extract_preferences(query, uid)
+    history = _load_session_history(uid, sid) if sid else []
+
+    for chunk in agent_stream(
+        user_query=query,
+        history=history,
+        uid=uid,
+        image_path=image_path,
+        max_iter=5,
+    ):
+        yield chunk
 
 
 # ============== 路由表 ==============
+# 关键设计(2026-10-09 升级):
+# - schedule / schedule_upload / image_ocr 走快捷路径(数据库查询,不需要 LLM 决策,快)
+# - 其他意图(scholarship / kb / news / general)全部走 ReAct Agent
+#   (让 LLM 自己决定调哪个 tool / 调几次 / 调完要不要再调)
 ROUTE_TABLE = {
     "schedule": handle_schedule,
     "schedule_upload": handle_schedule_upload,
     "image_ocr": handle_image_ocr,
-    "scholarship": handle_rag,
-    "kb": handle_rag,
-    "news": handle_rag,
-    "general": handle_general,
+    # 以下所有意图统一走 ReAct Agent
+    "scholarship": handle_agent,
+    "kb": handle_agent,
+    "news": handle_agent,
+    "general": handle_agent,
 }
 
 
-def dispatch(query: str, uid: str) -> Dict:
+def dispatch(query: str, uid: str, sid: str = "") -> Dict:
     """
     总入口：识别意图 → 抽取偏好 → 路由分发 → 返回结果
+    Args:
+        query: 用户问题
+        uid: 用户 ID（来自 cookie，已校验白名单 ^wxu_[A-Za-z0-9_-]{8,32}$）
+        sid: session ID（用于多轮历史隔离，空字符串表示无 session）
     Returns:
         {"intent": str, "answer": str, "sources": list}
     """
@@ -276,7 +323,7 @@ def dispatch(query: str, uid: str) -> Dict:
 
     handler = ROUTE_TABLE.get(intent, handle_general)
     try:
-        result = handler(query, uid, intent)
+        result = handler(query, uid, intent, sid=sid)
         result["intent"] = intent
         return result
     except Exception as e:

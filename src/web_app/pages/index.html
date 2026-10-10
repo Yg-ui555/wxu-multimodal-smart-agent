@@ -9,7 +9,7 @@
     <span class="wxu-ticker-item">📚 收录 <span class="num">2.9 万</span> 条校园资料</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>🌅 校园通知每日自动更新</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>📸 截图文字一键识别</span>
-    <span class="wxu-ticker-item"><span class="sep">·</span>🎯 答得上来 <span class="num">87%</span></span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>🎯 答得上来 <span class="num">62%</span>（60 题线上实测）</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>⚡ <span class="num">23</span> 分钟前刚同步</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>🏫 覆盖 <span class="num">7</span> 个校内网站</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>📷 图片物体识别已就绪</span>
@@ -109,7 +109,7 @@
       </div>
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-mute);padding-top:12px;border-top:1px dashed var(--mist);">
         <span>📚 <b style="color:var(--accent-deep);">7</b> 个网站</span>
-        <span>🎯 <b style="color:var(--accent-deep);">87%</b> 答得上</span>
+        <span>🎯 <b style="color:var(--accent-deep);">62%</b> 答得上（60 题实测）</span>
         <span>🔄 每日更新</span>
       </div>
     </div>
@@ -557,6 +557,18 @@ async function sendQuery() {
   let firstTokenArrived = false;  // 2026-09-24:首字是否到达,首次到达立刻 render(不等节流)
   const flushRender = () => {
     pendingRender = false;
+    // 2026-10-09:检测到 LLM 幻觉,整段丢弃后只显示"已过滤"提示
+    if (aiMsg._hallucinationDetected && !aiTextBuffer) {
+      if (!firstTokenArrived) {
+        dotsCleared = true;
+        clearInterval(dotsTimer);
+        aiMsg.classList.remove('wxu-chat-thinking');
+        firstTokenArrived = true;
+      }
+      aiMsg.innerHTML = '<div style="font-size:13px;color:#dc2626;padding:10px 14px;background:#fef2f2;border-left:3px solid #dc2626;border-radius:6px;display:inline-block;">⚠️ 模型输出异常，已过滤（来源数据由系统自动管理，不需要模型输出）</div>';
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+      return;
+    }
     // 第一次 render 时去掉"思考中"动画(变成正式答案样式)+ 停掉点点点计时器
     if (!firstTokenArrived) {
       dotsCleared = true;  // 2026-09-24:先停 dotsTimer 防覆盖
@@ -600,6 +612,24 @@ async function sendQuery() {
               // 后端用 <<WXU_DOCS_b3f9a2e1>>: 但 LLM 看到 prompt 后可能照样模仿
               // 这里前端兜底,任何疑似 marker / JSON / sources 帧的 text 不渲染
               if (looksLikeMarkerOrJson(obj.text)) continue;
+              // 2026-10-09 累积 buffer 检测:LLM 流式幻觉可能分段吐,
+              // 单 chunk 不像 marker 但累积起来像(典型:`<<` + `>>:[{...}]` 跨 chunk 拼接)
+              // 一旦确认整段是 marker/JSON 模式开头,丢弃已收内容 + 后续所有 chunk,
+              // 改显示"已过滤"提示,避免脏数据进入对话历史
+              if (!aiMsg._hallucinationDetected) {
+                const probe = aiTextBuffer + obj.text;
+                if (looksLikeMarkerOrJson(aiTextBuffer) || looksLikeMarkerOrJson(probe)) {
+                  aiMsg._hallucinationDetected = true;
+                  aiTextBuffer = '';
+                  scheduleRender();
+                  continue;
+                }
+              }
+              if (aiMsg._hallucinationDetected) {
+                // 已确认是幻觉输出,后续 chunk 全部丢弃,仅维持"已过滤"提示
+                scheduleRender();
+                continue;
+              }
               aiTextBuffer += obj.text;
               // 2026-09-24:首字立刻 render(不等 16ms 节流),后续维持节流
               if (!firstTokenArrived) {

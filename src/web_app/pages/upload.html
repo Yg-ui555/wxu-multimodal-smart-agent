@@ -16,6 +16,18 @@
   </div>
   <div id="status-schedule" class="wxu-status" style="display:none;"></div>
 </div>
+
+<!-- 实验课表上传(2026-10-09 新增) -->
+<div class="wxu-card">
+  <div class="wxu-card-eyebrow">合并 · 实验课</div>
+  <div class="wxu-card-title">🧪 实验课表(Excel / CSV / 截图)</div>
+  <div class="wxu-file-hint" style="margin-bottom:8px;">
+    班级群发的实验课表(例:24电信1, 24电信2, 24电信3 分批上课)<br>
+    系统会按你在 <a href="/schedule">/schedule</a> 页面设置的<b>"班级名"</b>自动过滤,<b>只入你班的那几节</b>
+  </div>
+  <input type="file" id="file-experiment" class="wxu-file-input" accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg">
+  <div id="status-experiment" class="wxu-status" style="display:none;"></div>
+</div>
 {% endblock %}
 
 {% block extra_script %}
@@ -52,6 +64,7 @@ function uploadFile(inputId, statusId, endpoint) {
 }
 
 uploadFile('file-schedule', 'status-schedule', '/api/schedule/upload');
-// OCR / YOLO 端点待接入
+// 实验课表上传(2026-10-09 新增)
+uploadFile('file-experiment', 'status-experiment', '/api/upload/experiment_table');
 </script>
 {% endblock %}
