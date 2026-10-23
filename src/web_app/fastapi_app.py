@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, BackgroundTasks, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.concurrency import run_in_threadpool  # 2026-09-22 新增：把同步阻塞调用丢线程池
@@ -31,6 +31,9 @@ from fastapi.concurrency import run_in_threadpool  # 2026-09-22 新增：把同�
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+
+# 2026-10-12 加:Prometheus 客户端(无 src 依赖,放最前)
+from prometheus_client import CONTENT_TYPE_LATEST
 
 # 让 src 包可被 import
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -45,6 +48,13 @@ from src.web_app.agent import dispatcher
 from src.curriculum import db as cv_db
 from src.curriculum import ui as cv_ui
 from src.curriculum.parser import parse_uploaded_file
+
+# 2026-10-12 加:工程化 —— 缓存 + 监控(在 sys.path 加入后 import)
+from src.web_app.answer_cache import answer_cache  # Redis + fakeredis 兜底
+from src.web_app.monitoring import (
+    render_metrics, observe_cache, observe_request, observe_error,
+    CACHE_SKIPPED, track_in_flight,
+)  # Prometheus 指标
 
 
 # ============================================================
@@ -478,8 +488,26 @@ async def upload(request: Request):
 # ============================================================
 @app.get("/health")
 async def health():
-    """健康检查（验收项1：返回 {"ok": true}）"""
-    return {"ok": True, "ts": datetime.now().isoformat()}
+    """健康检查（验收项1：返回 {"ok": true} + 缓存状态）"""
+    rag = dispatcher._get_rag()
+    rag_ready = rag is not None and rag.qa_system is not None
+    return {
+        "ok": True,
+        "ts": datetime.now().isoformat(),
+        "rag_ready": rag_ready,
+        "use_multihop": bool(getattr(rag, "multi_hop", None)) if rag else False,
+        "cache_mode": answer_cache.mode,          # 2026-10-12 加:redis / fakeredis / memory
+        "cache_stats": answer_cache.stats(),      # 命中率统计
+    }
+
+
+# 2026-10-12 加:Prometheus 抓取端点
+# 用法:Prometheus 配置 scrape_configs 抓 http://<host>:7862/metrics
+# 或浏览器直接打开看原始指标
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Prometheus 指标端点(给 Grafana / Alertmanager 抓)"""
+    return Response(content=render_metrics(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/api/schedule")
@@ -845,39 +873,99 @@ async def api_chat(request: Request):
     dispatcher._extract_preferences(query, uid)
 
     # 2. sync generator 给 StreamingResponse(在线程池里跑,不阻塞 event loop)
+    # 2026-10-12 加:Answer Cache 拦截 + Prometheus 指标收尾
     def event_stream():
-        accumulated = []
-        if intent == "schedule":
-            result = dispatcher._format_schedule(uid, query)
-            answer = result["answer"]
-            yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
-            memory.save(uid, "assistant", answer, intent=intent)
-            _append_session_message(uid, sid, "assistant", answer)
-        elif intent == "schedule_upload":
-            answer = "📤 上传课表请去「上传中心」页面,选 PDF 文件即可,我会自动解析存进你的课表。"
-            yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
-            memory.save(uid, "assistant", answer, intent=intent)
-            _append_session_message(uid, sid, "assistant", answer)
-        elif intent == "image_ocr":
-            answer = "🖼️ 看图直接去「上传中心」把图片传上来就行,我来帮你看里面的内容。"
-            yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
-            memory.save(uid, "assistant", answer, intent=intent)
-            _append_session_message(uid, sid, "assistant", answer)
-        else:
-            # 2026-10-09 升级:走 ReAct Agent 路径(LLM 自主决定调哪个 tool)
-            # agent_stream 内部会流式 yield 文本 + "[🔧 正在调 XX]" 工具调用提示
-            for chunk in dispatcher.handle_agent_stream(query, uid, intent, sid=sid):
-                accumulated.append(chunk)
-                yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
-            assistant_text = "".join(accumulated)
-            memory.save(uid, "assistant", assistant_text, intent=intent)
-            _append_session_message(uid, sid, "assistant", assistant_text)
-            yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
-            log.info("chat ReAct 流式完成 uid=%s sid=%s intent=%s 答案长=%d", uid[:8], sid[:8], intent, len(assistant_text))
-        yield "data: [DONE]\n\n"
+        import time as _t
+        t0 = _t.time()
+        status_holder = {"status": "success"}  # 闭包,finally 里读
+        final_text_holder = {"text": ""}        # 闭包,写缓存用
+
+        try:
+            with track_in_flight():
+                # ===== 2026-10-12 加:Answer Cache 拦截 =====
+                # 只对 ReAct 路径(走 LLM)生效,快捷路径(schedule 等)直接走原逻辑
+                cacheable = intent not in ("schedule", "schedule_upload", "image_ocr")
+                cache_key = answer_cache.make_key(query) if cacheable else None
+
+                if cacheable:
+                    if answer_cache.skip_for_personal(query):
+                        # 个性化问题("今天/我的")→ 不走缓存
+                        CACHE_SKIPPED.labels(reason="personal_query").inc()
+                    else:
+                        cached = answer_cache.get(cache_key)
+                        if cached:
+                            # ★ 缓存命中:直接 yield,不走 LLM,延迟 <50ms
+                            observe_cache("answer", hit=True)
+                            cached_answer = cached["answer"]
+                            yield f"data: {json.dumps({'text': cached_answer}, ensure_ascii=False)}\n\n"
+                            yield f"data: {json.dumps({'sources': cached.get('sources', []), 'intent': intent, 'done': True, 'sid': sid, 'cached': True}, ensure_ascii=False)}\n\n"
+                            memory.save(uid, "assistant", cached_answer, intent=intent)
+                            _append_session_message(uid, sid, "assistant", cached_answer)
+                            final_text_holder["text"] = cached_answer
+                            log.info("chat cache HIT uid=%s sid=%s intent=%s", uid[:8], sid[:8], intent)
+                            return  # ★ 提前结束,跳过整个 dispatch
+                        # 缓存未命中
+                        observe_cache("answer", hit=False)
+
+                # ===== 原有逻辑(走 LLM) =====
+                accumulated = []
+                if intent == "schedule":
+                    result = dispatcher._format_schedule(uid, query)
+                    answer = result["answer"]
+                    yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
+                    memory.save(uid, "assistant", answer, intent=intent)
+                    _append_session_message(uid, sid, "assistant", answer)
+                    final_text_holder["text"] = answer
+                elif intent == "schedule_upload":
+                    answer = "📤 上传课表请去「上传中心」页面,选 PDF 文件即可,我会自动解析存进你的课表。"
+                    yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
+                    memory.save(uid, "assistant", answer, intent=intent)
+                    _append_session_message(uid, sid, "assistant", answer)
+                    final_text_holder["text"] = answer
+                elif intent == "image_ocr":
+                    answer = "🖼️ 看图直接去「上传中心」把图片传上来就行,我来帮你看里面的内容。"
+                    yield f"data: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
+                    memory.save(uid, "assistant", answer, intent=intent)
+                    _append_session_message(uid, sid, "assistant", answer)
+                    final_text_holder["text"] = answer
+                else:
+                    # 2026-10-09 升级:走 ReAct Agent 路径(LLM 自主决定调哪个 tool)
+                    # agent_stream 内部会流式 yield 文本 + "[🔧 正在调 XX]" 工具调用提示
+                    for chunk in dispatcher.handle_agent_stream(query, uid, intent, sid=sid):
+                        accumulated.append(chunk)
+                        yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+                    assistant_text = "".join(accumulated)
+                    memory.save(uid, "assistant", assistant_text, intent=intent)
+                    _append_session_message(uid, sid, "assistant", assistant_text)
+                    yield f"data: {json.dumps({'sources': [], 'intent': intent, 'done': True, 'sid': sid}, ensure_ascii=False)}\n\n"
+                    log.info("chat ReAct 流式完成 uid=%s sid=%s intent=%s 答案长=%d", uid[:8], sid[:8], intent, len(assistant_text))
+                    final_text_holder["text"] = assistant_text
+                    # ★ 2026-10-12 写缓存(只对 ReAct 路径 + 非个性化 + 有内容)
+                    if cacheable and not answer_cache.skip_for_personal(query) and assistant_text:
+                        answer_cache.set(cache_key, {
+                            "answer": assistant_text,
+                            "sources": [],
+                            "intent": intent,
+                        })
+                yield "data: [DONE]\n\n"
+        except Exception as e:
+            # 任何异常都吞掉并标记为 error,不暴露给用户堆栈
+            status_holder["status"] = "error"
+            observe_error("chat_stream_error")
+            log.exception("chat event_stream 异常 uid=%s sid=%s", uid[:8], sid[:8])
+            err_msg = "\n\n⚠️ 出错了: " + type(e).__name__
+            yield "data: " + json.dumps({"text": err_msg}, ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            # ★ 2026-10-12 收尾:Prometheus 记录本次请求(无论成功/失败/缓存命中)
+            elapsed = _t.time() - t0
+            try:
+                observe_request(intent, status_holder["status"], elapsed)
+            except Exception:
+                pass  # 监控绝不能影响业务
 
     response = StreamingResponse(event_stream(), media_type="text/event-stream")
     # 把当前 sid 写回 cookie(首次会话/换 sid 时需要)

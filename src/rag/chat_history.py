@@ -451,7 +451,8 @@ class SimpleChatManager:
             question=question
         )
 
-        from langchain.schema import HumanMessage
+        # 2026-10-12 修复:langchain 1.x 移除了 langchain.schema,改用 langchain_core.messages
+        from langchain_core.messages import HumanMessage
         response = self.llm.invoke([HumanMessage(content=prompt)])
         answer = response.content
 
