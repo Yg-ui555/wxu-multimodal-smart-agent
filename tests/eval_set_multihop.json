@@ -1,0 +1,74 @@
+[
+  {
+    "id": 1,
+    "category": "多跳-课程教室",
+    "difficulty": "hard",
+    "question": "电子信息工程专业大三上学期的必修课一般在哪里上？",
+    "expected_keywords": ["电子信息工程", "大三", "教室", "教学楼"],
+    "sources_expected": ["培养方案", "教室分布"],
+    "note": "需要先召回'培养方案'拿到课程名,再召回'教室分布'拿到位置;单跳只能拿到培养方案"
+  },
+  {
+    "id": 2,
+    "category": "多跳-奖学金",
+    "difficulty": "hard",
+    "question": "奖学金评定大概在什么时候?需要提前准备什么材料?",
+    "expected_keywords": ["奖学金", "评定", "材料"],
+    "sources_expected": ["奖学金评定通知", "学生工作处申请流程"],
+    "note": "时间在'奖学金通知',材料清单在'学工处流程';需两路召回"
+  },
+  {
+    "id": 3,
+    "category": "多跳-课表教室",
+    "difficulty": "hard",
+    "question": "我周三下午的课在哪个教学楼?",
+    "expected_keywords": ["周三", "教学楼", "教室"],
+    "sources_expected": ["班级课表PDF", "教室分布表"],
+    "note": "单跳课表只能给课程名,教室在另一份文档;无课表时该题 recall=0"
+  },
+  {
+    "id": 4,
+    "category": "多跳-图书馆",
+    "difficulty": "medium",
+    "question": "图书馆周末开放吗?周一闭馆吗?",
+    "expected_keywords": ["图书馆", "开放", "周末"],
+    "sources_expected": ["图书馆开放通知", "图书馆周末特别安排"],
+    "note": "通用开放时间 + 周末特例两份文档"
+  },
+  {
+    "id": 5,
+    "category": "多跳-转专业",
+    "difficulty": "hard",
+    "question": "我想转专业,流程是什么?绩点有什么要求?",
+    "expected_keywords": ["转专业", "绩点", "申请"],
+    "sources_expected": ["转专业通知", "学籍管理规定"],
+    "note": "流程在'转专业通知',绩点要求在'学籍管理'或'选课规定'"
+  },
+  {
+    "id": 6,
+    "category": "多跳-助学金",
+    "difficulty": "hard",
+    "question": "国家助学金和校级奖学金能同时拿吗?",
+    "expected_keywords": ["助学金", "奖学金", "兼得"],
+    "sources_expected": ["国家助学金通知", "校级奖学金细则"],
+    "note": "兼得规则需对比两份文档才能答完整;单跳会漏一边"
+  },
+  {
+    "id": 7,
+    "category": "多跳-英语四六级",
+    "difficulty": "medium",
+    "question": "英语四级没过能毕业吗?大几可以考?",
+    "expected_keywords": ["四级", "毕业", "学分"],
+    "sources_expected": ["培养方案-毕业要求", "四六级报名通知"],
+    "note": "毕业要求在培养方案,考试时间在四六级通知"
+  },
+  {
+    "id": 8,
+    "category": "多跳-挂科",
+    "difficulty": "hard",
+    "question": "我挂了一门必修课,还能参评奖学金吗?需要补考吗?",
+    "expected_keywords": ["挂科", "奖学金", "补考"],
+    "sources_expected": ["奖学金评定细则", "成绩管理通知"],
+    "note": "挂科影响奖学金在'评定细则',补考规则在'成绩管理'"
+  }
+]

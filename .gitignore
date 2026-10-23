@@ -34,6 +34,18 @@ tests/eval_baseline.json
 tests/eval_current_with_hyde.json
 tests/*.html
 
+# 未跑完的评估产物（partial = 中途断掉的中间结果，不是结论）
+tests/eval_*_partial.jsonl
+# 评估集的中间版本与备份（只保留当前生效的那份）
+tests/eval_set_*_backup.json
+tests/eval_set_240.json
+
+# 压测原始数据（脚本本身 locustfile.py 要传，数据不用）
+tests/load_test_*.csv
+
+# 根目录下的临时评估脚本（scripts/ 下的正式脚本要传）
+/_run_eval_*.py
+
 # IDE
 .idea/
 .vscode/

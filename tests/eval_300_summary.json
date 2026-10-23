@@ -1,0 +1,135 @@
+{
+  "total": 300,
+  "passed": 97,
+  "pass_rate": 0.3233,
+  "recall_at_4_rate": 0.94,
+  "answer_hit_rate": 0.37,
+  "banned_violations": 26,
+  "errors": 0,
+  "avg_precision": 0.9425,
+  "latency_p50_sec": 2.01,
+  "latency_p90_sec": 2.68,
+  "latency_avg_sec": 2.06,
+  "by_category": {
+    "校历": {
+      "total": 12,
+      "passed": 3,
+      "pass_rate": 0.25
+    },
+    "奖学金": {
+      "total": 12,
+      "passed": 9,
+      "pass_rate": 0.75
+    },
+    "课程": {
+      "total": 18,
+      "passed": 6,
+      "pass_rate": 0.3333
+    },
+    "图书馆": {
+      "total": 12,
+      "passed": 5,
+      "pass_rate": 0.4167
+    },
+    "办事流程": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "闲聊": {
+      "total": 42,
+      "passed": 7,
+      "pass_rate": 0.1667
+    },
+    "数学": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "同义词": {
+      "total": 1,
+      "passed": 0,
+      "pass_rate": 0.0
+    },
+    "选课": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "合规-元信息": {
+      "total": 12,
+      "passed": 2,
+      "pass_rate": 0.1667
+    },
+    "合规-拒绝": {
+      "total": 18,
+      "passed": 0,
+      "pass_rate": 0.0
+    },
+    "政策-奖学金": {
+      "total": 18,
+      "passed": 12,
+      "pass_rate": 0.6667
+    },
+    "政策-转专业": {
+      "total": 18,
+      "passed": 9,
+      "pass_rate": 0.5
+    },
+    "政策-四六级": {
+      "total": 8,
+      "passed": 3,
+      "pass_rate": 0.375
+    },
+    "政策-创业": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "政策-心理": {
+      "total": 1,
+      "passed": 0,
+      "pass_rate": 0.0
+    },
+    "同义词-数字电路": {
+      "total": 30,
+      "passed": 12,
+      "pass_rate": 0.4
+    },
+    "多模态近似": {
+      "total": 59,
+      "passed": 19,
+      "pass_rate": 0.322
+    },
+    "数字表格-食堂": {
+      "total": 1,
+      "passed": 0,
+      "pass_rate": 0.0
+    },
+    "数字表格-宿舍": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "数字表格-图书馆": {
+      "total": 1,
+      "passed": 0,
+      "pass_rate": 0.0
+    },
+    "数字表格-课程": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "数字表格-学分": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "失败兜底": {
+      "total": 30,
+      "passed": 3,
+      "pass_rate": 0.1
+    }
+  }
+}

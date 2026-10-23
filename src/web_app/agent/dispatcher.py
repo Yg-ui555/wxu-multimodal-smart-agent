@@ -16,6 +16,7 @@
     - RAG 不可用时降级为关键词回复，不抛异常
 """
 
+import os
 import re
 import logging
 import threading
@@ -25,6 +26,15 @@ from . import memory
 from .intent import detect_intent
 
 log = logging.getLogger("dispatcher")
+
+# ═══════════════════════════════════════════════════════════════════
+# Agent 引擎开关 —— LangGraph vs react_engine(手写循环)
+# ═══════════════════════════════════════════════════════════════════
+# 2026-10-11 加:.env 里设 USE_LANGGRAPH_AGENT=1 切换到 LangGraph 版
+# 默认 0(react_engine),两者并存,行为对齐
+_USE_LG = os.getenv("USE_LANGGRAPH_AGENT") == "1"
+log.info(f"[dispatcher] Agent engine: {'LangGraph(状态图)' if _USE_LG else 'react_engine(手写循环)'}")
+
 
 # ============== 偏好抽取（"我叫张三"→ name=张三） ==============
 _NAME_PATTERNS = [
@@ -111,7 +121,11 @@ def _load_session_history(uid: str, sid: str, limit: int = 12):
 
 
 def _rag_answer(query: str, uid: str, sid: str = "") -> Dict:
-    """调 RAG 检索 + 生成答案（qa_system.answer 内部已含检索）"""
+    """调 RAG 检索 + 生成答案（2026-10-12 改:支持 USE_MULTIHOP 开关）
+    关键改动:
+        - 多跳开启时:retriever 走多跳检索(自动拆解 query),其余流程不变
+        - 多跳失败时:静默降级到单跳,不影响用户
+    """
     rag = _get_rag()
     if rag is None:
         return {
@@ -126,6 +140,39 @@ def _rag_answer(query: str, uid: str, sid: str = "") -> Dict:
         pref_hint = f"（用户叫{prefs['name']}，回答时可适当称呼）" if prefs.get("name") else ""
         # 加载当前 session 的多轮历史(2026-09-24)
         history = _load_session_history(uid, sid) if sid else []
+
+        # ★ 2026-10-12 关键改动:多跳分支
+        # 2026-10-12 收尾修复:不借/还 qa_system.retriever(避免多线程 race condition)
+        # 改为:直接调 multi_hop.retrieve_with_sources 拿 context+sources,自己接 LLM
+        # 优点:不污染 qa_system 状态,线程安全
+        if rag.multi_hop is not None:
+            try:
+                # 1) 多跳检索拿 context 和 sources
+                context, sources = rag.multi_hop.retrieve_with_sources(f"{query}{pref_hint}")
+                # 2) 自己接 LLM(用 qa_system 同款 prompt)
+                from src.rag.llm_chain import format_history_for_prompt, clean_answer
+                from langchain_core.prompts import PromptTemplate
+                history_section = format_history_for_prompt(history)
+                prompt = PromptTemplate(
+                    template=rag.qa_system.template,
+                    input_variables=["context", "question", "history_section"],
+                )
+                chain = prompt | rag.qa_system.llm
+                response = chain.invoke({
+                    "context": context,
+                    "question": f"{query}{pref_hint}",
+                    "history_section": history_section,
+                }).content
+                return {
+                    "answer": clean_answer(response.strip()),
+                    "sources": sources,
+                }
+            except Exception as e:
+                # 多跳出问题 → 静默降级到单跳(下面 try)
+                log.warning(f"多跳 RAG 异常,降级为单跳: {e!r}")
+                # 不 return,继续走下面的单跳分支
+
+        # 单跳分支(默认/降级都走这里)
         result = rag.qa_system.answer(f"{query}{pref_hint}", history=history)
         return {
             "answer": result.get("answer", "（无回复）"),
@@ -240,51 +287,85 @@ def handle_agent(query: str, uid: str, intent: str, sid: str = "") -> Dict:
     1. 任何用户问句(闲聊 / RAG / 知识查询)都让 LLM 自己决定要不要调 tool
     2. 闲聊("你好"等) LLM 不会调 tool,直接答(0 额外开销)
     3. 隐含意图 LLM 自己推断,不用 if-else 关键词路由
-    """
-    from src.agent.react_engine import agent_run
 
+    v2(2026-10-11):根据 USE_LANGGRAPH_AGENT 切换实现
+    """
     # 1. 先抽偏好(保持原有"我叫 XX"逻辑,不依赖 LLM 也能存)
     _extract_preferences(query, uid)
 
     # 2. 加载多轮历史
     history = _load_session_history(uid, sid) if sid else []
 
-    # 3. 跑 ReAct loop
-    result = agent_run(
-        user_query=query,
-        history=history,
-        uid=uid,
-        max_iter=5,
-    )
-
-    return {
-        "answer": result["answer"],
-        "sources": [],   # ReAct 模式下来源由 tool 决定,前端不强求
-        "tool_calls": result["tool_calls_log"],   # 新增:给前端展示"AI 调了啥 tool"
-        "iterations": result["iterations"],
-    }
+    # 3. ★ 开关决定走哪个 Agent 引擎
+    if _USE_LG:
+        from src.agent.langgraph_engine import agent_run
+        result = agent_run(
+            user_query=query,
+            history=history,
+            uid=uid,
+            sid=sid,            # LangGraph 版要用 sid 做 checkpointer 隔离
+            max_iter=5,
+        )
+        # langgraph 版多返回 trace / cost_ms,前端 trace UI 用
+        return {
+            "answer": result["answer"],
+            "sources": [],
+            "tool_calls": result.get("tool_calls_log", []),
+            "iterations": result.get("iterations", 0),
+            "trace": result.get("trace", []),     # ★ 给前端 trace UI
+            "engine": "langgraph",                # ★ 标记用了哪个引擎(给前端显示)
+        }
+    else:
+        from src.agent.react_engine import agent_run
+        result = agent_run(
+            user_query=query,
+            history=history,
+            uid=uid,
+            max_iter=5,
+        )
+        return {
+            "answer": result["answer"],
+            "sources": [],
+            "tool_calls": result.get("tool_calls_log", []),
+            "iterations": result.get("iterations", 0),
+            "trace": [],                          # react_engine 不返回 trace
+            "engine": "react_engine",
+        }
 
 
 def handle_agent_stream(query: str, uid: str, intent: str, sid: str = "",
                         image_path: str = ""):
     """ReAct Agent 流式入口(给 fastapi_app.py 的 SSE 用)。
 
+    v2(2026-10-11):根据 USE_LANGGRAPH_AGENT 切换实现
     Yields:
         str: 增量文本(LLM token + 工具调用提示)
     """
-    from src.agent.react_engine import agent_stream
-
     _extract_preferences(query, uid)
     history = _load_session_history(uid, sid) if sid else []
 
-    for chunk in agent_stream(
-        user_query=query,
-        history=history,
-        uid=uid,
-        image_path=image_path,
-        max_iter=5,
-    ):
-        yield chunk
+    # ★ 开关决定走哪个 Agent 引擎
+    if _USE_LG:
+        from src.agent.langgraph_engine import agent_stream
+        for chunk in agent_stream(
+            user_query=query,
+            history=history,
+            uid=uid,
+            sid=sid,
+            image_path=image_path,
+            max_iter=5,
+        ):
+            yield chunk
+    else:
+        from src.agent.react_engine import agent_stream
+        for chunk in agent_stream(
+            user_query=query,
+            history=history,
+            uid=uid,
+            image_path=image_path,
+            max_iter=5,
+        ):
+            yield chunk
 
 
 # ============== 路由表 ==============

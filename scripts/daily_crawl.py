@@ -116,7 +116,7 @@ WATCHED_PAGES = [
         "name": "办事流程",
         "list_url": "https://jwc.cwxu.edu.cn/ywbl/bslc{page}.htm",
         "target_dir": "data/docs/学校通知/办事流程",
-        "pages": 2,
+        "pages": 1,  # 2026-10-11 改:教务处这个板块实际只有 1 页,pages:2 会硬抓 bslc/2.htm 触发 404
     },
     {
         "name": "教学新闻",
