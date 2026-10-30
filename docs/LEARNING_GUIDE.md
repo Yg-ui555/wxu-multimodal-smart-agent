@@ -122,7 +122,7 @@ ollama serve          # 启动服务（默认127.0.0.1:11434）
 
 ### 15. Bad Case 分析报告
 
-模板：`tests/bad_case_report.md`
+模板：`tests/bad-case-report.md`
 ```markdown
 ## Bad Case #01: 多轮指代丢失
 **现象**: 第一轮问"图书馆开放时间"，第二轮问"里面能充电吗"，LLM 答非所问

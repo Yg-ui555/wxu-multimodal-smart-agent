@@ -1,6 +1,6 @@
 # 无锡学院多模态校园智能助手
 
-> 基于 RAG + YOLO-World + PaddleOCR 的校园问答助手。支持自然语言问答、拍照识图、图片文字提取，所有嵌入与重排模型本地运行，仅答案生成调用大模型 API。
+> 基于 RAG + YOLO-World + PaddleOCR + ReAct Agent 的校园智能助手。支持自然语言问答、拍照识图、图片文字提取；嵌入与重排模型全部本地运行，仅答案生成调用大模型 API。
 
 ---
 
@@ -33,8 +33,16 @@
                     └──── 转为文本 ───────────┘
                                          │
                                          ▼
-                          意图判断（知识库 / 闲聊）
+                          意图判断（知识库 / 闲聊 / 快捷指令）
                                          │
+                    ┌────────────────────┴────────────────────┐
+                    ▼                                         ▼
+          快捷指令直达                           ReAct Agent 自主决策
+          （课表 / 上传 / OCR）                   ├─ 校内通知检索（RAG）
+                                                   ├─ 我的课表
+                                                   ├─ 图片 OCR
+                                                   └─ 联网兜底
+                    └────────────────────┬────────────────────┘
                                          ▼
                     ┌──────── 混合检索（Hybrid Retriever）────────┐
                     │                                              │
@@ -62,8 +70,8 @@
 | 类别 | 选型 | 说明 |
 |---|---|---|
 | Python | 3.11.9 | |
-| Web UI | Gradio 6.28.0 | 豆包式多 session 界面 |
-| 向量库 | FAISS-CPU 1.15.1 | 本地存储，29376 文本块 |
+| Web UI | FastAPI 0.118 + Jinja2 | 多页应用（问答 / 课表 / 奖学金 / 校园生活 / 上传中心），豆包式多 session 界面 |
+| 向量库 | FAISS-CPU 1.15.1 | 本地存储，29631 文本块（1024 维，2026-10-30 实测 `index.faiss`） |
 | 嵌入模型 | bge-m3（Ollama 本地） | 中文语义向量，零 API 成本 |
 | 重排模型 | bge-reranker-v2-m3（Ollama 本地） | |
 | 关键词检索 | rank-bm25 | |
@@ -334,29 +342,37 @@ python src/web_app/fastapi_app.py
 wxu-multimodal-smart-agent/
 ├── src/
 │   ├── rag/                    # RAG 核心
-│   │   ├── data_loader.py      # 文档加载 + 清洗 + 分块(800/150)
+│   │   ├── chunk_config.py     # 切块参数单一真相源(chunk_size / overlap)
+│   │   ├── data_loader.py      # 文档加载 + 清洗 + 分块
 │   │   ├── vector_store.py     # FAISS 向量库管理
-│   │   ├── retriever.py        # 混合检索(BM25+向量+RRF)+重排
+│   │   ├── retriever.py        # 混合检索(BM25 + 向量 + RRF)
+│   │   ├── multi_hop.py        # 多跳检索(LLM 拆子问题 + RRF 融合)
 │   │   ├── llm_chain.py        # 问答链 + 引用来源
 │   │   ├── chat_history.py     # 分层对话记忆
+│   │   ├── answer_cache.py     # 答案缓存(Redis → fakeredis → 进程内 LRU)
 │   │   └── rag_evaluate.py     # 评估脚本
+│   ├── agent/                  # ReAct Agent
+│   │   ├── react_engine.py     # LangChain AgentExecutor 实现
+│   │   ├── langgraph_engine.py # LangGraph 实现(USE_LANGGRAPH_AGENT 切换)
+│   │   └── tools/              # 4 个工具(通知检索 / 课表 / 图片 OCR / 联网)
+│   ├── curriculum/             # 课表解析(班级分桶 + 周次计算)
 │   ├── yolo/                   # 图像识别
-│   │   └── inference.py        # YOLO-World 推理
+│   │   └── inference.py        # YOLO-World 推理(权重缺失时自动下载)
 │   ├── ocr/                    # 文字识别
 │   │   └── ocr_engine.py       # PaddleOCR 封装
-│   ├── crawler/                # 通知爬虫
 │   └── web_app/                # Web 应用（FastAPI 多页架构）
 │       ├── fastapi_app.py      # FastAPI 主入口（多页 + REST API）
 │       ├── image_assistant.py  # 图片分发(YOLO/OCR)
 │       ├── upload_handler.py   # 文档上传处理
 │       ├── user_store.py       # 多用户多 session 管理
+│       ├── monitoring.py        # Prometheus 指标
 │       └── agent/              # 意图路由 / memory / dispatcher
 │           ├── dispatcher.py
 │           ├── memory.py
 │           └── intent.py
-├── scripts/                    # 工具脚本(爬虫/构建/启动)
-├── tests/                      # 评估测试集 + bad case 报告
-├── docs/                       # 学习指南/问题记录/面试准备
+├── scripts/                    # 工具脚本(爬虫 / 构建 / 评测 / 启动)
+├── tests/                      # 评估测试集(300 题) + bad case 报告
+├── docs/                       # 学习指南 / 问题记录 / 面试准备
 └── data/                       # 向量库 + 文档(不上传 Git)
 ```
 
@@ -378,10 +394,15 @@ wxu-multimodal-smart-agent/
 ## 验证脚本
 
 ```bash
-# 课表班级分桶 + 实验课过滤入桶 e2e(端到端验证整个 Priority 2 链路)
-python scripts/_test_experiment_table_e2e.py
+# 端到端冒烟：venv311 + RAG 环境自检（Ollama / 向量库 / 检索 / 问答链路）
+python scripts/smoke_test.py
+
+# 跑 300 题评测（线上同步配置：bge-m3 + BM25/向量 RRF 双路，无 reranker）
+python scripts/eval_runner.py --save-baseline --label production --html report.html
+
+# 多跳检索对比（基线 vs MultiHopRetriever）
+python scripts/eval_multihop.py --mode compare
 ```
-预期输出：CSV 7 行 → 过滤精准 3 条命中 `class_id=2` 桶 → `/api/schedule` 拉回 3 条 → 自动清理测试数据
 
 ---
 
@@ -410,5 +431,5 @@ python scripts/_test_experiment_table_e2e.py
 
 - [操作手册](操作手册.md) — 8 周逐周开发计划
 - [学习指南](docs/LEARNING_GUIDE.md) — 代码原理与模块说明
-- [Bad Case 报告](tests/bad_case_report.md) — RAG 召回失败案例分析
+- [Bad Case 报告](tests/bad-case-report.md) — RAG 召回失败案例分析
 - [面试准备](docs/interview_prep_tech_details.md) — 技术面试要点

@@ -16,6 +16,12 @@ venv_old/
 # 数据（向量库、文档、用户历史）—— 体积大且含校内资料
 data/
 
+# YOLO 模型权重（32MB）—— 不进版本库
+# src/yolo/inference.py 已实现「本地没有就自动从 ultralytics 下载并放回 weights/」，
+# 所以 clone 之后第一次跑会自动补齐，仓库不需要背着 32MB 模型。
+src/yolo/weights/
+*.pt
+
 # 日志
 logs/
 *.log
@@ -39,6 +45,9 @@ tests/eval_*_partial.jsonl
 # 评估集的中间版本与备份（只保留当前生效的那份）
 tests/eval_set_*_backup.json
 tests/eval_set_240.json
+# 例外：60 题历史基线要留着——README 的「60 题 vs 300 题」对比表依赖它，
+#       没有它那张表无法复现。
+!tests/eval_set_60_backup.json
 
 # 压测原始数据（脚本本身 locustfile.py 要传，数据不用）
 tests/load_test_*.csv
@@ -63,3 +72,12 @@ scripts/_*.py
 scripts/_*.cjs
 scripts/_diag/      # 调试脚本归类目录(2026-10-10 整理时统一放这里)
 # *
+# 例外：这两个是【正式】评测脚本（README 直接链到它们，clone 后要能跑），
+#       所以单独放行，不受上面 scripts/_*.py 规则影响。
+!scripts/_eval_resumable.py
+!scripts/_generate_eval_set.py
+
+# AI 编程助手的运行时目录（checkpoint / 外置输出 / 错题本）—— 不该进版本库
+.mini-coder/
+.notes/
+
