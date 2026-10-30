@@ -114,8 +114,8 @@ def look_at_image(image_path: str, progress=None) -> dict:
         if progress is not None:
             try:
                 progress(ratio, desc=desc)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("进度回调失败（忽略）: %r", e)
 
     objects: List[Tuple[str, int]] = []
     annotated_path: Optional[str] = None

@@ -28,6 +28,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.rag.data_loader import DocumentLoader, TextChunker
+from src.rag.chunk_config import CHUNK_SIZE, CHUNK_OVERLAP
 from src.rag.vector_store import create_vectorstore_from_docs
 
 # 日志配置：同时输出到文件 + 控制台
@@ -100,7 +101,7 @@ def main():
     started_at = time.time()
 
     loader = DocumentLoader(docs_dir=docs_dir)
-    chunker = TextChunker(chunk_size=800, overlap=150)
+    chunker = TextChunker(chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
 
     all_chunks = []
     success_files = []

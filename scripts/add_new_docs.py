@@ -20,6 +20,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.rag.data_loader import DocumentLoader, TextChunker
+from src.rag.chunk_config import CHUNK_SIZE, CHUNK_OVERLAP
 from src.rag.vector_store import VectorStoreManager
 
 
@@ -88,7 +89,7 @@ def main():
     # 4. 加载 + 切块 + 加入
     print("\n[3/3] 加载 + 切块 + 入库...")
     loader = DocumentLoader(docs_dir=docs_dir)
-    chunker = TextChunker(chunk_size=800, overlap=150)
+    chunker = TextChunker(chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
 
     new_chunks = []
     for full_path, rel, status in new_files:

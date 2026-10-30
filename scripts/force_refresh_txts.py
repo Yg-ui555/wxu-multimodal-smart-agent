@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, '.')
 
 from src.rag.data_loader import DocumentLoader, TextChunker
+from src.rag.chunk_config import CHUNK_SIZE, CHUNK_OVERLAP
 from src.rag.vector_store import VectorStoreManager
 
 # 1. 加载现有 FAISS
@@ -12,7 +13,7 @@ manager.load_vectorstore()
 
 # 2. 加载并切块
 loader = DocumentLoader(docs_dir='data/docs')
-chunker = TextChunker(chunk_size=800, overlap=150)
+chunker = TextChunker(chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
 
 target_files = [
     'data/docs/学校通知/关于2026年下半年全国大学英语四、六级笔试和口试报名的通知-无锡学院教务处.txt',

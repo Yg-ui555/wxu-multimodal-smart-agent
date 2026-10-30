@@ -71,6 +71,7 @@ def _compat_patch_for_legacy_pickle():
         _pyd_main.BaseModel.__setstate__ = _patched_setstate
     except Exception:
         # 升级后删掉本函数时，pydantic.v1 还在 ImportError；静默忽略
+        log.warning("pydantic v1 兼容补丁注入失败，旧版 pickle 反序列化可能报错", exc_info=True)
         pass
 
 
@@ -86,7 +87,8 @@ def _read_progress(persist_directory: str) -> int:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return int(data.get("last_completed_batch", 0))
-    except Exception:
+    except Exception as e:
+        log.warning(f"读取构建进度失败，按 0 处理: {path} ({e})")
         return 0
 
 
@@ -130,7 +132,7 @@ class VectorStoreManager:
         # 初始化嵌入模型（使用 Ollama）
         self.embeddings = OllamaEmbeddings(
             model=embedding_model,
-            base_url="http://127.0.0.1:11434"
+            base_url=os.getenv("EMBED_BASE_URL", "http://127.0.0.1:11434")
         )
 
         # 向量库实例（延迟初始化）
@@ -188,7 +190,8 @@ class VectorStoreManager:
                 try:
                     with open(doc_path, "rb") as f:
                         saved_docs = pickle.load(f)
-                except Exception:
+                except Exception as e:
+                    log.warning(f"断点续跑时 documents.pkl 读取失败，已保存文档降级为空: {doc_path} ({e})")
                     saved_docs = []
             self._documents = saved_docs
             # 写 stdout 心跳，避免后台进程被误判

@@ -45,6 +45,8 @@ from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
+from src.rag.chunk_config import CHUNK_SIZE, CHUNK_OVERLAP
+
 
 # 标题识别正则（中文章节标题）
 HEADING_PATTERNS = [
@@ -260,7 +262,7 @@ class DocumentLoader:
 class TextChunker:
     """文本分块器（标题感知）"""
 
-    def __init__(self, chunk_size: int = 800, overlap: int = 150):
+    def __init__(self, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP):
         """
         初始化分块器
         Args:
@@ -385,7 +387,7 @@ def load_and_chunk(docs_dir: str = "data/docs", dedup: bool = True) -> List[Docu
         print("警告: 未加载到任何文档")
         return []
 
-    chunker = TextChunker(chunk_size=800, overlap=150)
+    chunker = TextChunker(chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
     chunks = chunker.split_documents(documents)
 
     before = len(chunks)

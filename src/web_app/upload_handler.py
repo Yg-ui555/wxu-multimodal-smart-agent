@@ -37,6 +37,7 @@ from src.rag.data_loader import (
     dedup_chunks,
     _content_hash,
 )
+from src.rag.chunk_config import CHUNK_SIZE, CHUNK_OVERLAP
 from src.rag.vector_store import VectorStoreManager
 from langchain_core.documents import Document
 
@@ -130,7 +131,7 @@ def process_uploads(
         return result
 
     loader = DocumentLoader()
-    chunker = TextChunker(chunk_size=800, overlap=150)
+    chunker = TextChunker(chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
     manager = VectorStoreManager(persist_directory=vector_db_dir)
 
     # 先加载已有向量库以构建"已有 hash 集合"（用于跨文件去重）

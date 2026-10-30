@@ -32,9 +32,12 @@ import time
 import threading
 import hashlib
 import uuid
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
+
+log = logging.getLogger("user_store")
 
 _BASE = Path(__file__).resolve().parent.parent.parent / "data" / "user_histories"
 _BASE.mkdir(parents=True, exist_ok=True)
@@ -76,10 +79,12 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> bool:
             f.write(payload)
         os.replace(tmp, path)
         return True
-    except Exception:
+    except Exception as e:
+        log.warning(f"原子写失败，目标文件写入未完成: {path} ({e})")
         try:
             tmp.unlink()
-        except Exception:
+        except Exception as e2:
+            log.warning(f"清理临时文件失败: {tmp} ({e2})")
             pass
         return False
 
@@ -92,7 +97,10 @@ def _read_json(path: Path) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        # 文件不存在是首次写入的正常情况，不刷警告；真损坏（坏 JSON / 权限）才警告
+        if path.exists():
+            log.warning(f"读取 JSON 失败，降级为空 dict: {path} ({e})")
         return {}
 
 
@@ -258,7 +266,8 @@ def delete_session(uid: str, sid: str) -> bool:
         if p_chat.exists():
             try:
                 p_chat.unlink()
-            except Exception:
+            except Exception as e:
+                log.warning(f"删除 session 状态文件失败: {p_chat} ({e})")
                 pass
     return True
 
@@ -274,7 +283,8 @@ def delete_user(uid: str) -> bool:
         import shutil
         shutil.rmtree(d)
         return True
-    except Exception:
+    except Exception as e:
+        log.warning(f"删除用户目录失败: {d} ({e})")
         return False
 
 

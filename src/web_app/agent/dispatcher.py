@@ -402,7 +402,10 @@ def dispatch(query: str, uid: str, sid: str = "") -> Dict:
     # 任何意图下都先尝试抽偏好（"我叫张三"可能出现在任意句子里）
     _extract_preferences(query, uid)
 
-    handler = ROUTE_TABLE.get(intent, handle_general)
+    # 兜底走 handle_agent（2026-10-09 起 handle_agent 已取代 handle_rag / handle_general，
+    # 这里原来还写着 handle_general —— 那个函数在 c681dc8 就被删了，
+    # 而 dict.get 的默认参数是【先求值再传参】，所以这行会让每次 dispatch 都抛 NameError）
+    handler = ROUTE_TABLE.get(intent, handle_agent)
     try:
         result = handler(query, uid, intent, sid=sid)
         result["intent"] = intent

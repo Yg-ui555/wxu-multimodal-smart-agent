@@ -443,6 +443,7 @@ def add_files_to_vectorstore(file_paths):
     """
     from src.rag.vector_store import VectorStoreManager
     from src.rag.data_loader import DocumentLoader, TextChunker
+    from src.rag.chunk_config import CHUNK_SIZE, CHUNK_OVERLAP
 
     # 1. 加载 + 清洗
     loader = DocumentLoader("data/docs")
@@ -463,7 +464,7 @@ def add_files_to_vectorstore(file_paths):
         return 0
 
     # 2. 切块
-    chunker = TextChunker(chunk_size=800, overlap=150)
+    chunker = TextChunker(chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
     chunks = chunker.split_documents(all_docs)
     LOG.info(f"  共 {len(all_docs)} 个文档 → {len(chunks)} 个 chunks")
 
