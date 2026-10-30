@@ -32,7 +32,54 @@
 
 {% block extra_script %}
 <script>
-function uploadFile(inputId, statusId, endpoint) {
+// 2026-10-30 修复:原来上传完直接读 data.parsed 显示 "✅ 解析成功:N 节课",
+// 但两个上传接口返回的只有 {task_id, ...},解析是在后台线程做的,
+// data.parsed 永远是 undefined → 走 else 分支 → 不管后台解析成功还是失败,
+// 前端都显示 "✅ 上传成功"。用户以为存好了,其实可能压根没解析出来。
+// 现在改成:拿到 task_id 后轮询 /api/upload/status/{task_id},显示真实结果。
+const STATUS_POLL_INTERVAL = 1000;   // 1 秒一次
+const STATUS_MAX_WAIT = 120000;      // 最多等 2 分钟
+
+async function pollStatus(taskId, statusEl) {
+  const deadline = Date.now() + STATUS_MAX_WAIT;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, STATUS_POLL_INTERVAL));
+    let res;
+    try {
+      res = await fetch(`/api/upload/status/${taskId}`);
+    } catch (e) {
+      continue;   // 网络抖动,下一轮再试
+    }
+    if (!res.ok) continue;
+    let data;
+    try { data = await res.json(); } catch (e) { continue; }
+
+    if (data.status === 'done') return data;
+    if (data.status === 'error') throw new Error(data.error || '解析失败');
+    // pending → 继续等
+  }
+  throw new Error('解析超时(2 分钟),请稍后到「我的课表」页面确认结果');
+}
+
+function renderDone(statusEl, data) {
+  statusEl.className = 'wxu-status success';
+  if (data.kind === 'schedule') {
+    const n = data.parsed || 0;
+    if (n > 0) {
+      statusEl.textContent = `✅ 解析成功:${n} 节课(解析方式:${data.parse_method},成功率:${data.parse_rate})`;
+    } else {
+      statusEl.textContent = '⚠️ 上传成功,但一节课都没解析出来 —— 请确认 PDF 是教务系统导出的课表格式,或换一张更清晰的截图';
+    }
+  } else if (data.kind === 'experiment') {
+    statusEl.textContent = `✅ 实验课表已入库:新增 ${data.saved} 节,重复 ${data.duplicated} 节,跳过 ${data.skipped} 节`;
+  } else if (data.kind === 'document') {
+    statusEl.textContent = `✅ 文档已入库:新增 ${data.chunks_added} 个知识片段`;
+  } else {
+    statusEl.textContent = '✅ 上传成功:' + JSON.stringify(data);
+  }
+}
+
+async function uploadFile(inputId, statusId, endpoint) {
   const input = document.getElementById(inputId);
   const status = document.getElementById(statusId);
   input.addEventListener('change', async () => {
@@ -46,16 +93,20 @@ function uploadFile(inputId, statusId, endpoint) {
       fd.append('file', file);
       const resp = await fetch(endpoint, {method: 'POST', body: fd});
       if (!resp.ok) {
-        const err = await resp.json();
-        throw new Error(err.detail || '上传失败');
+        let detail = '上传失败';
+        try { detail = (await resp.json()).detail || detail; } catch (e) { /* 非 JSON 错误体 */ }
+        throw new Error(detail);
       }
       const data = await resp.json();
-      status.className = 'wxu-status success';
-      if (data.parsed !== undefined) {
-        status.textContent = `✅ 解析成功:${data.parsed} 节课(${data.parse_method})`;
-      } else {
+      if (!data.task_id) {
+        // 没有 task_id 说明接口没走异步任务,直接按同步结果渲染
+        status.className = 'wxu-status success';
         status.textContent = '✅ 上传成功:' + JSON.stringify(data);
+        return;
       }
+      status.textContent = '⏳ 已上传,后台解析中…';
+      const done = await pollStatus(data.task_id, status);
+      renderDone(status, done);
     } catch (e) {
       status.className = 'wxu-status error';
       status.textContent = '❌ ' + e.message;

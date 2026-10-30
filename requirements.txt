@@ -1,6 +1,6 @@
 # ============================================================
 # WXU Multimodal Smart Agent - 依赖清单
-# Python 3.11  |  最后验证: 2026-09-19
+# Python 3.11  |  最后验证: 2026-10-30（venv311 实跑 pytest 22 通过）
 # ============================================================
 # 安装顺序（重要! paddleocr 对 opencv 有过时的版本上限约束）:
 #   1. pip install -r requirements.txt --no-deps paddleocr   # 先装 paddleocr 本体
@@ -13,6 +13,15 @@
 # 另外: imgaug 0.4.0 不兼容 numpy 2.x,需手动打 5 处补丁
 #   (imgaug.py / parameters.py / polys.py / meta.py)
 #   补丁内容见 docs/issues/ 或联系维护者
+# ============================================================
+# ⚠️ 2026-10-30 补过一轮漏列（对照全仓 import 逐条核过）:
+#   prometheus-client 是 src/web_app/fastapi_app.py 的【模块级】import,
+#   漏装会导致 clone 之后直接 ModuleNotFoundError 起不来 —— 别再删这几行。
+#
+# ⚠️ 同日又对齐了 6 个包的版本号（requirements 之前钉的不是实际在跑的那套）:
+#   sentence-transformers 5.5.0→6.1.0 / fastapi 0.118.0→0.141.1 / uvicorn 0.37.0→0.53.0
+#   python-multipart 0.0.20→0.0.32 / pdfplumber 0.11.4→0.11.10 / sqlalchemy 2.1.0→2.0.54
+#   现在这里钉的 == venv311 里实际装、且 22 个 pytest 用例跑通的那一套。
 # ============================================================
 
 # ---------- Web / 应用框架（FastAPI 多页架构，2026-10-09 移除 Gradio） ----------
@@ -28,7 +37,7 @@ langchain-openai==1.6.2
 faiss-cpu==1.15.1
 rank-bm25==0.2.2
 jieba==0.42.1
-sentence-transformers==5.5.0   # 2026-10-09 加：smoke_test.py:69 / eval_runner.py 间接 import；原 requirements 漏列
+sentence-transformers==6.1.0   # 2026-10-09 加：smoke_test.py:69 / eval_runner.py 间接 import；原 requirements 漏列
 
 # ---------- 文档解析 ----------
 pymupdf==1.28.2            # PyMuPDFLoader (PDF)
@@ -56,13 +65,34 @@ requests==2.34.2
 pandas==3.0.6
 
 # ---------- FastAPI 多页 Web 应用（2026-09-22 新增） ----------
-fastapi==0.118.0
-uvicorn[standard]==0.37.0
-python-multipart==0.0.20        # FastAPI 文件上传依赖
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32        # FastAPI 文件上传依赖
 jinja2==3.1.6                   # 页面模板渲染
-pdfplumber==0.11.4              # PDF 课表解析
-sqlalchemy==2.1.0               # ORM（备用，memory 用原生 sqlite3）
+pdfplumber==0.11.10             # PDF 课表解析
+sqlalchemy==2.0.54              # ORM（备用，memory 用原生 sqlite3）
 slowapi==0.1.10                 # 2026-09-24 加:API 限流(防 LLM 配额/计算资源被刷爆)
+
+# ---------- 监控 / 缓存（2026-10-30 补：原清单漏列） ----------
+# prometheus-client 是 fastapi_app.py 的模块级 import —— 漏装直接起不来
+prometheus-client==0.26.0       # /metrics 端点 + 10 个指标（src/web_app/monitoring.py）
+redis==8.1.0                    # 生产缓存（src/web_app/answer_cache.py）
+fakeredis==2.39.0               # 开发环境替身（answer_cache.py 三级降级的中间层）
+
+# ---------- Agent 引擎（2026-10-30 补：原清单漏列） ----------
+langgraph==1.2.11               # USE_LANGGRAPH_AGENT=1 时的状态图引擎（src/agent/langgraph_engine.py）
+duckduckgo-search>=4.0          # web_search 工具的免 key 搜索；不装则该工具降级为不可用（代码已做 try/except）
+
+# ---------- 课表解析补充（2026-10-30 补：实验课 Excel 用） ----------
+openpyxl==3.1.5                 # .xlsx 实验课表解析
+xlrd==2.0.1                     # 老版 .xls 实验课表解析
+
+# ---------- 评估 / 压测工具（2026-10-30 补：原清单漏列） ----------
+matplotlib==3.11.2              # HTML 报告里的图表（scripts/eval_report_html.py）
+locust==2.46.7                  # 压测（tests/locustfile.py）
+
+# ---------- 可选：RAGAS 深度评估（scripts/eval_ragas.py，不装不影响主流程） ----------
+# pip install ragas datasets
 
 # ---------- 开发 / 测试（2026-10-09 加：CI 语法检查 + pytest 雏形） ----------
 pytest==8.4.2                   # pytest 雏形测试（tests/ 目录）

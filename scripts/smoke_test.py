@@ -5,14 +5,18 @@ venv311 + 依赖 + 本地模型 + 向量库 一站式冒烟测试（smoke test�
 用途：每次换电脑/重装环境后，跑这一个脚本就能知道整条 RAG 链路是否还活着。
 
 覆盖范围：
-  [1/4] 关键库 import（cv2/paddleocr/gradio/faiss/bm25/jieba/sentence-transformers）
-  [2/4] Ollama 服务 + bge-m3 嵌入 + bge-reranker 模型在线
-  [3/4] FAISS 向量库加载（确认 29k chunks 索引可读）
-  [4/4] 完整 RAG 检索链路：query → bge-m3 embedding → FAISS top-5 → reranker → top-4
+  [1/4] 关键库 import（cv2/paddleocr/fastapi/faiss/bm25/jieba/sentence-transformers）
+  [2/4] Ollama 服务 + bge-m3 嵌入模型在线
+  [3/4] FAISS 向量库加载（确认 2.9 万块索引可读，实测 29631 块）
+  [4/4] 完整 RAG 检索链路：query → bge-m3 embedding → FAISS top-5 → RRF 融合 → top-4
+        （重排是可选的：后端 = HuggingFace CrossEncoder `BAAI/bge-reranker-v2-m3`，
+          与 src/rag/retriever.py 的 BGEReranker 一致；生产默认不挂重排）
 
 注意：
   - 不调 LLM（避免依赖 .env 里的 LLM_API_KEY + 节省时间）
   - 不重建向量库（只测加载）
+  - Web 层只做 import 自检：项目 2026-09-22 起从 Gradio 迁到 FastAPI
+    （`src/web_app/fastapi_app.py`），Gradio 已于 2026-10-09 删除，别再检查 gradio
   - 跑通 ≈ web_app + eval_runner.py 一定能跑（除了 LLM 那一跳）
 
 退出码：0 = 全通；非 0 = 有 FAIL 项
@@ -73,8 +77,8 @@ def step_imports():
         # 再 paddleocr 链路
         "cv2",                     # OpenCV
         "paddleocr",               # PaddleOCR（会改 sys.path，必须放后面）
-        "gradio",                  # Gradio
         # 工具
+        "fastapi",                 # FastAPI（Web 层；2026-09-22 起替代 Gradio）
         "requests",                # HTTP（Ollama 调用）
         "pymupdf",                 # PyMuPDF（fitz）
         "docx",                    # python-docx
@@ -94,19 +98,24 @@ def step_imports():
 # [2/4] Ollama 服务 + 本地模型
 # ──────────────────────────────────────
 def step_ollama():
-    """检查 Ollama 服务 + bge-m3 嵌入 + bge-reranker 模型在线"""
+    """检查 Ollama 服务 + bge-m3 嵌入模型在线
+
+    ⚠️ 重排模型**不在 Ollama 里**：代码里的重排后端是 HuggingFace CrossEncoder
+    （`BAAI/bge-reranker-v2-m3`，见 `src/rag/retriever.py` 的 `BGEReranker`），
+    生产默认不挂重排（CPU 太慢），所以这一步不检查重排模型。
+    """
     import requests
     r = requests.get("http://localhost:11434/api/tags", timeout=5)
     r.raise_for_status()
     models = [m["name"] for m in r.json().get("models", [])]
-    required = ["bge-m3:latest", "qllama/bge-reranker-v2-m3:latest"]
+    required = ["bge-m3:latest"]
     missing = [m for m in required if m not in models]
     if missing:
         raise RuntimeError(
             f"Ollama 缺模型: {missing}\n"
             f"        拉取: ollama pull {' '.join(m.replace(':latest','') for m in missing)}"
         )
-    return f"已装 {len(models)} 个模型（含 bge-m3 + reranker）"
+    return f"已装 {len(models)} 个模型（含 bge-m3 嵌入）"
 
 
 # ──────────────────────────────────────
@@ -125,10 +134,15 @@ def step_vectorstore():
 
 
 # ──────────────────────────────────────
-# [4/4] RAG 检索链路（含 reranker）
+# [4/4] RAG 检索链路（含可选重排）
 # ──────────────────────────────────────
 def step_retrieve(skip_rerank: bool = False):
-    """跑一道题：query → embedding → FAISS top-5 → reranker → top-4"""
+    """跑一道题：query → embedding → FAISS top-5 → RRF 融合 → top-4
+
+    重排后端 = HuggingFace CrossEncoder（`BAAI/bge-reranker-v2-m3`），
+    与 `src/rag/retriever.py` 的 `BGEReranker` 一致；生产默认不挂重排（CPU 太慢），
+    这里默认带重排跑一遍，`--skip-rerank` 可跳过。
+    """
     from src.rag.vector_store import VectorStoreManager
     from src.rag.retriever import create_retriever
 
@@ -158,6 +172,18 @@ def step_retrieve(skip_rerank: bool = False):
         raise RuntimeError("retrieve 返回空（FAISS 索引可能损坏）")
     if not docs[0].page_content.strip():
         raise RuntimeError("top-1 doc 内容为空（documents.pkl 可能没加载）")
+
+    # 重排是否真的跑起来了：BGEReranker 加载失败时会静默跳过重排，
+    # 不检查的话这条链路会"假通过"，这里显式断言。
+    if not skip_rerank:
+        if retriever.reranker is None:
+            raise RuntimeError("use_reranker=True 但 reranker 没建起来（create_retriever 没透传？）")
+        if retriever.reranker._available is False:
+            raise RuntimeError(
+                "BGE-reranker 加载失败（HF 模型没下载好或网络不通）："
+                "生产不受影响（默认不挂重排），但重排链路没真正跑起来；"
+                "可加 --skip-rerank 跳过重排"
+            )
 
     top_sources = [d.metadata.get("source", "?") for d in docs[:4]]
     snippet = docs[0].page_content[:60].replace("\n", " ")
@@ -196,9 +222,9 @@ def main():
     print("\n[3/4] FAISS 向量库加载")
     _check("vectorstore", step_vectorstore)
 
-    print("\n[4/4] RAG 检索链路（embedding + FAISS + reranker）")
+    print("\n[4/4] RAG 检索链路（embedding + FAISS + RRF 融合 + 可选重排）")
     _check("retrieve", step_retrieve, detail=False)
-    rerank_label = "（已跳过 reranker）" if args.skip_rerank else "（含 reranker）"
+    rerank_label = "（已跳过 reranker）" if args.skip_rerank else "（含 HF CrossEncoder 重排）"
     print(f"        -> {rerank_label}")
 
     _print_summary()

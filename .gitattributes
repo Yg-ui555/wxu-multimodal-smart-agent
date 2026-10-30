@@ -1,0 +1,34 @@
+# ============================================================
+# 行尾规范：让「同一份代码在 Linux CI 与 Windows 本机」内容一致
+# ============================================================
+# 为什么要显式钉死：
+#   本机 core.autocrlf=true（Windows 默认），工作区文件会被转成 CRLF。
+#   如果不管，仓库里存的是 LF、Linux clone 出来是 LF、而 Windows 工作区是 CRLF，
+#   于是同一份代码在不同机器上字节不同 —— diff 会出现"假修改"，
+#   而且任何按字节匹配的断言（评测锚点、快照）都会在 Windows 上莫名其妙失败。
+#
+# 规则：
+#   * 文本文件统一用 LF 存进仓库；Windows 检出时按 eol=lf 保持 LF。
+#     （本项目没有依赖 CRLF 的脚本，Python / JS / MD 全用 LF 最省事）
+#   * .bat 例外：cmd.exe 的 goto/label 对 LF-only 的批处理有已知的
+#     "找不到标签"问题，必须是 CRLF。
+#   * .ps1 例外：PowerShell 5.1 读无 BOM 且含中文的 .ps1 会按 ANSI(GBK) 解码，
+#     中文变乱码、甚至凭空产生引号导致语法报错。所以 .ps1 固定 CRLF + BOM。
+# ============================================================
+
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制，禁用任何行尾/文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.pt binary
+*.vsix binary

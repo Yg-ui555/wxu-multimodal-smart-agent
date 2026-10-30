@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}拍照识图 · 无锡学院智能助手{% endblock %}
+
+{% block content %}
+<div class="wxu-page-title">
+  <span>拍照识图</span>
+  <span class="wxu-page-title-en">Look At It</span>
+</div>
+
+<div class="wxu-card">
+  <div class="wxu-card-eyebrow">多模态 · 认物 + 识字</div>
+  <div class="wxu-card-title">📷 上传一张图片</div>
+  <div class="wxu-file-hint" style="margin-bottom:8px;">
+    系统会同时做两件事：<b>认东西</b>（YOLO-World 开放词汇检测）和<b>读文字</b>（PaddleOCR 中文识别）<br>
+    识别结果会整理成大白话，不出现技术参数
+  </div>
+  <input type="file" id="file-look" class="wxu-file-input" accept=".png,.jpg,.jpeg,.webp,.bmp">
+  <div id="status-look" class="wxu-status" style="display:none;"></div>
+</div>
+
+<div id="result-look" style="display:none;">
+  <div class="wxu-card">
+    <div class="wxu-card-eyebrow">认到的东西</div>
+    <div id="objects-look" class="wxu-card-title" style="font-size:18px;">—</div>
+  </div>
+  <div class="wxu-card">
+    <div class="wxu-card-eyebrow">读到的文字</div>
+    <pre id="ocr-look" style="white-space:pre-wrap;word-break:break-all;font-size:14px;line-height:1.6;margin:0;">—</pre>
+  </div>
+  <div class="wxu-card">
+    <div class="wxu-card-eyebrow">人话总结</div>
+    <div id="desc-look" style="font-size:15px;line-height:1.8;">—</div>
+    <div class="wxu-file-hint" style="margin-top:12px;">
+      想接着问？去 <a href="/">首页</a> 对话，把这张图的内容说给它听就行。
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+// 2026-10-30 新增:把 src/web_app/image_assistant.py(认物+识字)接到 Web 端。
+// 在此之前这个模块是零引用的孤儿 —— 首页写着"图片物体识别已就绪",但没有任何入口。
+const MAX_SIZE = 10 * 1024 * 1024;   // 10MB 上限,防止超大图把内存吃满
+
+document.getElementById('file-look').addEventListener('change', async function () {
+  const file = this.files[0];
+  if (!file) return;
+
+  const status = document.getElementById('status-look');
+  status.className = 'wxu-status';
+  status.textContent = '⏳ 识别中…(认物 + 识字,可能要十几秒)';
+  status.style.display = 'block';
+  document.getElementById('result-look').style.display = 'none';
+
+  if (file.size > MAX_SIZE) {
+    status.className = 'wxu-status error';
+    status.textContent = '❌ 图片太大了(上限 10MB),换一张小一点的';
+    return;
+  }
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const resp = await fetch('/api/image/look', {method: 'POST', body: fd});
+    if (!resp.ok) {
+      let detail = '识别失败';
+      try { detail = (await resp.json()).detail || detail; } catch (e) { /* 非 JSON 错误体 */ }
+      throw new Error(detail);
+    }
+    const data = await resp.json();
+
+    const objs = data.objects || [];
+    document.getElementById('objects-look').textContent =
+      objs.length ? objs.map(o => `${o[0]} ×${o[1]}`).join('、') : '没有认出明确的物品';
+
+    const ocr = (data.ocr_text || '').trim();
+    document.getElementById('ocr-look').textContent = ocr || '（没读到成片的文字）';
+
+    document.getElementById('desc-look').textContent = data.description || '—';
+
+    document.getElementById('result-look').style.display = 'block';
+    status.className = 'wxu-status success';
+    status.textContent = '✅ 识别完成';
+  } catch (e) {
+    status.className = 'wxu-status error';
+    status.textContent = '❌ ' + e.message;
+  }
+});
+</script>
+{% endblock %}

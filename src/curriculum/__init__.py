@@ -17,7 +17,8 @@
         ↓ db.save_curriculum()
     SQLite (data/sqlite/curriculum_<user_id>.db)
         ↓ ui.render_week_view()
-    Gradio HTML 周视图（周一-周日 × 第 1-12 节）
+    周视图 HTML（周一-周日 × 第 1-12 节）
+    → 由 FastAPI 路由 /schedule 渲染到浏览器
 """
 
 from . import db, parser, ui, week, settings, experiment_parser

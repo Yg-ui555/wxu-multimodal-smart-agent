@@ -14,12 +14,15 @@ import os
 import sys
 import uuid
 import json
+import re
+import struct
 import logging
 import tempfile
 import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse, Response
@@ -483,6 +486,67 @@ async def upload(request: Request):
     return response
 
 
+@app.get("/look", response_class=HTMLResponse)
+async def look_page(request: Request):
+    """拍照识图页(YOLO-World 认物 + PaddleOCR 识字)"""
+    uid, is_new = _ensure_uid(request)
+    response = templates.TemplateResponse(request, "look.html", {})
+    if is_new:
+        _attach_uid_cookie(response, uid)
+    return response
+
+
+@app.post("/api/image/look")
+@limiter.limit("10/minute")   # YOLO 在 CPU 上很吃资源,限流
+async def api_image_look(request: Request, file: UploadFile = File(...)):
+    """上传图片 → 认物(YOLO-World 开放词汇)+ 识字(PaddleOCR)→ 返回结构化结果
+
+    2026-10-30 新增:
+        `src/web_app/image_assistant.py` 之前是**零引用的孤儿模块** ——
+        首页写着"📷 图片物体识别已就绪",但 Web 端压根没有入口能触发它。
+        这里把它接上,项目才真的算"多模态"。
+    """
+    from src.web_app.image_assistant import look_at_image, describe_for_student
+
+    # 1. 后缀白名单(只收图片)
+    allowed = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"只支持图片格式({'/'.join(sorted(allowed))})",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="空文件")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片太大(上限 10MB)")
+
+    # 2. 落盘到 data/uploaded_images/(与标注图目录同级)
+    upload_dir = Path("data") / "uploaded_images"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved_path = upload_dir / f"{uuid.uuid4().hex}{suffix}"
+    saved_path.write_bytes(content)
+
+    # 3. 识别(YOLO + OCR 都是同步阻塞的 CPU 密集调用,
+    #    必须丢线程池,否则整个 event loop 被卡住)
+    try:
+        info = await run_in_threadpool(look_at_image, str(saved_path))
+    except Exception as e:
+        log.exception("看图失败")
+        raise HTTPException(status_code=500, detail=f"识别失败:{type(e).__name__}")
+
+    return {
+        "objects": info.get("objects", []),
+        "ocr_text": info.get("ocr_text", ""),
+        "annotated_path": info.get("annotated_path"),
+        "object_count": info.get("object_count", 0),
+        "description": describe_for_student(info),
+        "saved_path": str(saved_path),
+    }
+
+
 # ============================================================
 # JSON API
 # ============================================================
@@ -498,6 +562,87 @@ async def health():
         "use_multihop": bool(getattr(rag, "multi_hop", None)) if rag else False,
         "cache_mode": answer_cache.mode,          # 2026-10-12 加:redis / fakeredis / memory
         "cache_stats": answer_cache.stats(),      # 命中率统计
+    }
+
+
+# ============================================================
+# 首页运行时统计(2026-10-30 新增)
+# ============================================================
+def _read_faiss_ntotal(index_path: Path) -> Optional[int]:
+    """只读 FAISS 索引文件头 16 字节,拿 ntotal(向量条数)
+
+    为什么不全量加载:index.faiss 有 121MB,为了在首页显示一个数字把整个索引
+    读进内存太不划算。FAISS IndexFlat 的文件头是:
+        [0:4]   magic "IxF*"(IxF2 = IndexFlat,float 向量)
+        [4:8]   d      (维度,int32)
+        [8:16]  ntotal (向量条数,int64)
+    读不到 / 格式不认识就返回 None —— 前端就不显示这个数字,
+    总比显示一个错的强。
+    """
+    try:
+        with open(index_path, "rb") as f:
+            head = f.read(16)
+        if len(head) < 16 or not head.startswith(b"IxF"):
+            return None
+        d = struct.unpack("<i", head[4:8])[0]
+        ntotal = struct.unpack("<q", head[8:16])[0]
+        if d <= 0 or ntotal < 0 or ntotal > 10_000_000:
+            return None
+        return ntotal
+    except Exception:
+        return None
+
+
+def _read_crawl_stats() -> Dict[str, Any]:
+    """从 scripts/daily_crawl.py 的 WATCHED_PAGES 里统计站点数 / 监控面数
+
+    用正则"读文件"而不是 import —— import 会执行模块顶层代码
+    (setup_logger 之类的副作用),为了显示两个数字不值当。
+    """
+    out: Dict[str, Any] = {"sites": None, "watch_pages": None}
+    try:
+        script = Path(__file__).resolve().parent.parent.parent / "scripts" / "daily_crawl.py"
+        text = script.read_text(encoding="utf-8")
+        urls = re.findall(r'"list_url":\s*"(https?://[^/"]+)', text)
+        if urls:
+            hosts = {urlparse(u).netloc for u in urls}
+            out["sites"] = len(hosts)
+            out["watch_pages"] = len(urls)
+    except Exception:
+        pass
+    return out
+
+
+@app.get("/api/stats")
+async def api_stats():
+    """首页展示用的运行时统计(真实数据,不是写死在 HTML 里的)
+
+    2026-10-30 新增:
+        首页原来把"29,377 条""7 个网站""23 分钟前刚同步"全写死 ——
+        条数早就过期(实测 29,631),"23 分钟前"更是假的
+        (不管什么时候打开页面都是 23 分钟前)。改成运行时取真实值:
+          - 知识库条数:读 FAISS 索引头的 ntotal
+          - 最后抓取时间:logs/crawl_state.json 的 last_run
+          - 站点数 / 监控面数:scripts/daily_crawl.py 的 WATCHED_PAGES
+    """
+    project_root = Path(__file__).resolve().parent.parent.parent
+    doc_count = _read_faiss_ntotal(project_root / "data" / "faiss_db_bge" / "index.faiss")
+
+    last_run = None
+    try:
+        state_path = project_root / "logs" / "crawl_state.json"
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            last_run = state.get("last_run")
+    except Exception:
+        pass
+
+    stats = _read_crawl_stats()
+    return {
+        "doc_count": doc_count,
+        "last_run": last_run,
+        "sites": stats["sites"],
+        "watch_pages": stats["watch_pages"],
     }
 
 
@@ -520,7 +665,11 @@ async def api_schedule(request: Request, week: int = 1):
     """
     from src.curriculum.settings import get_settings  # 局部导入避免循环
 
-    uid = request.cookies.get("wxu_uid", "anonymous")
+    # 2026-10-30 修复:原来用 `request.cookies.get("wxu_uid", "anonymous")`,
+    # 所有没登录的访客共享同一个 "anonymous" 账户 —— A 访问 /api/schedule
+    # 看到的就是 B 的课表。跟 /api/chat、/api/recommend 一样改用 _ensure_uid:
+    # cookie 不存在或不合法时现场生成独立 UUID。
+    uid, _ = _ensure_uid(request)
     settings = get_settings(uid)
     user_class_id = settings.get("class_id")
     # load_curriculum(class_id=X) -> X 的课 + 公共课(NULL) 都返回

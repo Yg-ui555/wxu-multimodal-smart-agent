@@ -47,6 +47,8 @@ import json
 import time
 import logging
 import threading
+import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Optional, Iterator, Literal
 
@@ -82,6 +84,9 @@ if _PROJ_ROOT not in _sys.path:
 from src.agent.tools import ALL_TOOLS, TOOL_MAP
 from src.agent.tools.get_user_schedule import set_current_uid
 from src.agent.tools.ocr_image import set_current_image
+
+# Prometheus 埋点(软依赖,没装 prometheus_client 也不影响 Agent)
+from src.agent.metrics import observe_tool_call
 
 log = logging.getLogger("agent.langgraph_engine")
 
@@ -132,6 +137,11 @@ class AgentState(TypedDict, total=False):
     started_at: float
     trace: List[Dict[str, Any]]
     node_visits: Dict[str, int]
+    # 2026-10-30 新增:当前请求的用户身份 + 图片路径。
+    # 工具节点执行前要把它们注入到 contextvars,否则 get_user_schedule
+    # 拿不到 uid(工具节点是模块级函数,拿不到闭包变量)。
+    uid: str
+    image_path: str
 
 
 def _now() -> float:
@@ -241,6 +251,11 @@ def tool_executor_node(state: AgentState) -> AgentState:
             status = "unknown_tool"
         else:
             try:
+                # ★ 紧邻 invoke 设 context(uid / 图片路径)。
+                #   uid 从 state 里取 —— 工具节点是模块级函数,拿不到闭包变量。
+                #   必须在 invoke 之前设,contextvars 只在同一段代码里才可靠。
+                set_current_uid(state.get("uid", ""))
+                set_current_image(state.get("image_path", ""))
                 result = TOOL_MAP[name].invoke(args)
                 status = "ok"
             except Exception as e:
@@ -248,6 +263,10 @@ def tool_executor_node(state: AgentState) -> AgentState:
                 result = f"(工具执行失败:{type(e).__name__}:{e})"
                 status = "error"
         t_cost = int((_now() - t_start) * 1000)
+
+        # Prometheus:工具调用次数 + 延迟(unknown_tool 不算真实调用)
+        if status != "unknown_tool":
+            observe_tool_call(name, t_cost / 1000.0)
 
         if isinstance(result, str) and len(result) > 4000:
             result = result[:4000] + "\n...(已截断)"
@@ -431,8 +450,26 @@ def build_agent_graph():
 #
 # 现在用 {uid}::{sid} 当 thread_id,跟会话 ID 绑定,稳。
 # 同时缓存"每 (uid,sid) 一张图",避免每次调用都重新编译。
-_graph_cache: Dict[str, Any] = {}
+_graph_cache: "OrderedDict[str, Any]" = OrderedDict()
 _graph_lock = threading.Lock()
+# 2026-10-30:图缓存原来是无上限 dict,每个新 (uid, sid) 都会编译一张新图并
+# 常驻内存 —— 匿名用户每来一个新会话就多一张图,跑久了内存只涨不落。
+# 改成 LRU:超过上限就淘汰最久没用的。
+_GRAPH_CACHE_MAX = int(os.getenv("LANGGRAPH_GRAPH_CACHE_MAX", "64"))
+
+
+def _make_thread_id(uid: str, sid: str, user_query: str = "") -> str:
+    """生成 checkpointer 的 thread_id。
+
+    正常路径:"{uid}::{sid}" —— sid 是会话 ID,稳定且唯一。
+    sid 为空(评测脚本 / 内部直接调 agent_run):用随机后缀,
+    **不能**退化成 user_query[:8] —— 不同问题前 8 个字相同就会撞 key,
+    checkpointer 里的状态互相覆盖(第一版就是这么错的)。
+    """
+    base = uid or "anon"
+    if sid:
+        return f"{base}::{sid}"
+    return f"{base}::noid-{uuid.uuid4().hex[:12]}"
 
 
 def get_graph(uid: str = "", sid: str = "") -> Any:
@@ -443,14 +480,16 @@ def get_graph(uid: str = "", sid: str = "") -> Any:
     保证多用户多会话各自一份图对象(避免 checkpointer 互相冲突)。
     """
     cache_key = f"{uid or 'anon'}::{sid or 'no_sid'}"
-    if cache_key in _graph_cache:
-        return _graph_cache[cache_key]
-
     with _graph_lock:
         if cache_key in _graph_cache:
+            _graph_cache.move_to_end(cache_key)
             return _graph_cache[cache_key]
         g = build_agent_graph()
         _graph_cache[cache_key] = g
+        # LRU 淘汰:超出上限就把最久没用的那张丢掉
+        while len(_graph_cache) > _GRAPH_CACHE_MAX:
+            old_key, _ = _graph_cache.popitem(last=False)
+            log.info(f"[LG] 图缓存超上限({_GRAPH_CACHE_MAX}),淘汰:key={old_key}")
         log.info(f"[LG] 编译新图:key={cache_key},checkpointer 已装")
         return g
 
@@ -501,11 +540,17 @@ def _dump_trace_to_jsonl(state: AgentState, sid: str, query: str, cost_ms: int) 
 # 8) 对外接口 —— 跟 react_engine 完全对齐
 # ═══════════════════════════════════════════════════════════════════
 
-def _init_state(user_query: str, history: Optional[List[Dict]] = None) -> AgentState:
+def _init_state(user_query: str,
+                history: Optional[List[Dict]] = None,
+                uid: str = "",
+                image_path: str = "") -> AgentState:
     """
     构造"刚启动时的初始 state"。
 
     messages = [system_prompt] + 历史对话 + 当前问题
+
+    uid / image_path 也放进 state:工具节点是模块级函数,拿不到闭包变量,
+    只能从 state 里取(见 tool_executor_node)。
     """
     sys_prompt = _get_react_system_prompt().format(tool_descriptions=_build_tool_descriptions())
     messages: List = [SystemMessage(content=sys_prompt)]
@@ -531,6 +576,8 @@ def _init_state(user_query: str, history: Optional[List[Dict]] = None) -> AgentS
         "started_at": _now(),
         "trace": [],
         "node_visits": {},
+        "uid": uid or "",
+        "image_path": image_path or "",
     }
 
 
@@ -554,14 +601,13 @@ def agent_run(user_query: str,
           "cost_ms":        int,              这次跑总耗时
         }
     """
-    if uid:
-        set_current_uid(uid)
-
     # ★ 用 uid::sid 作 thread_id,sid 由 dispatcher 传过来(每个 session 一个)
-    thread_id = f"{uid or 'anon'}::{sid or user_query[:8]}"
+    #   sid 为空时(评测脚本直接调)用随机后缀,否则不同问题前 8 个字相同就会
+    #   撞 checkpointer key,状态互相覆盖。
+    thread_id = _make_thread_id(uid, sid, user_query)
     graph = get_graph(uid, sid)
 
-    init = _init_state(user_query, history)
+    init = _init_state(user_query, history, uid=uid)
     config = {"configurable": {"thread_id": thread_id}}
 
     t0 = _now()
@@ -614,15 +660,10 @@ def agent_stream(user_query: str,
         - tools 节点 trace 更新          → 吐工具执行细节
         - final_answer 节点进来         → 吐 "[hitrace]=1" 标记
     """
-    if uid:
-        set_current_uid(uid)
-    if image_path:
-        set_current_image(image_path)
-
-    thread_id = f"{uid or 'anon'}::{sid or user_query[:8]}"
+    thread_id = _make_thread_id(uid, sid, user_query)
     graph = get_graph(uid, sid)
 
-    init = _init_state(user_query, history)
+    init = _init_state(user_query, history, uid=uid, image_path=image_path)
     config = {"configurable": {"thread_id": thread_id}}
 
     # graph.stream(mode="updates") 每个事件:{"<node_name>": {"<state_key>": new_value, ...}}

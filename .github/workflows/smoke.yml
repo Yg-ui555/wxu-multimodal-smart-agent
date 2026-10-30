@@ -1,13 +1,17 @@
 # ============================================================
-# Smoke Test CI (2026-10-09 加)
+# CI：语法检查 + 单元测试
 # ------------------------------------------------------------
-# 目的：每次 push / PR 自动跑语法检查，防止明显笔误进 main。
+# 目的：每次 push / PR 自动跑
+#   ① ast 语法检查 —— 防止明显笔误进 main
+#   ② pytest 单元测试 —— 让「22 个用例全绿」这句话有 CI 背书
 #
 # 为什么不跑完整 smoke_test.py？
 #   smoke_test.py 要 import torch + paddleocr + sentence_transformers，
 #   装这些要 5-10 分钟 + 几 GB 流量，CI 会超时。
-#   所以 CI 只跑 ast 语法检查 + 关键模块 import 检查（不依赖 Ollama）。
+#   所以 CI 跑【最小依赖集】（requirements-ci.txt）+ 单元测试，
 #   完整 smoke_test 留给本地 rebuild_venv.ps1 后手动跑。
+#
+# 单元测试不需要 Ollama、不需要 API key —— 见 requirements-ci.txt 的说明。
 # ============================================================
 
 name: Smoke Test
@@ -51,3 +55,35 @@ jobs:
               sys.exit(1)
           print(f'All {len(files)} files passed syntax check')
           "
+
+  unit-tests:
+    name: 单元测试 (Python ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install minimal test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Run pytest
+        run: python -m pytest tests/ -q --no-header -p no:cacheprovider
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output-${{ matrix.os }}
+          path: |
+            .pytest_cache/
+          retention-days: 7

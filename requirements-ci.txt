@@ -1,0 +1,39 @@
+# ============================================================
+# CI 最小依赖集 —— 只为跑单元测试（tests/）
+# ============================================================
+# 为什么要单独一份：
+#   requirements.txt 是「完整应用依赖」，含 torch / ultralytics / paddleocr，
+#   光这几样就有几 GB、装十分钟以上，CI 装不下也不该装 ——
+#   因为 tests/ 里跑的是【纯单元测试】：
+#     · test_retriever  只测 import + 函数签名，不实际检索（不碰 FAISS 索引 / Ollama）
+#     · test_llm_chain  只测两个纯函数（不调 LLM、不需要 API key）
+#     · test_dispatcher 只测意图路由的硬编码分支
+#     · test_chat_history / test_user_store / test_concurrency  测本地文件与线程行为
+#   实测：这套依赖装完 72 个包 / 约 300MB，pytest 22 个用例 11 秒跑完。
+#
+# ⚠️ 关键：不要在这里加 torch / paddleocr / ultralytics ——
+#    paddleocr 是【函数内懒加载】、sentence_transformers 也是【函数内懒加载】，
+#    所以单元测试根本不需要它们（见 src/ocr/ocr_engine.py 的 _get_ocr、
+#    src/rag/retriever.py:257 的 CrossEncoder）。
+#
+# 版本对齐 venv311（2026-10-30 实测 22 passed）。
+# ============================================================
+
+# --- 测试框架 ---
+pytest==8.4.2
+
+# --- 运行时基础 ---
+python-dotenv==1.2.3
+requests==2.34.2
+numpy==2.4.6
+
+# --- RAG 链路（被 src/rag/* 在模块级 import） ---
+langchain==1.4.2
+langchain-core==1.6.3
+langchain-community==0.4.2
+langchain-text-splitters==1.1.2
+langchain-ollama==1.1.0
+langchain-openai==1.6.2
+faiss-cpu==1.15.1
+rank-bm25==0.2.2
+jieba==0.42.1

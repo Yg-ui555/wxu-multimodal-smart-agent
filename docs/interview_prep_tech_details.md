@@ -11,7 +11,7 @@
 
 ## 一、一句话介绍
 
-> 我做了一个面向高校场景的多模态 RAG 助手：把教务处、图书馆、学工处等 7 个子站的通知定时抓下来建成 29631 块的本地向量库，
+> 我做了一个面向高校场景的多模态 RAG 助手：把教务处、图书馆、学工处等 7 类板块（6 个子站域名、共 20 个监控面）的通知定时抓下来建成 29631 块的本地向量库，
 > 用户用自然语言提问，命中不了关键词也能靠语义找回来；上传校园照片时，用 YOLO-World 零样本识别物体、PaddleOCR 提文字，
 > 再接回同一条检索链路；里面接了一个 4 工具的 ReAct Agent，让 LLM 自己决定要不要调检索、课表、OCR、联网。
 
@@ -86,7 +86,7 @@ reranker 只能对「已经召回的候选」重排，BM25 命中的精准文档
 | 指标 | 含义 | 60 题 | 300 题 |
 |---|---|---|---|
 | **recall@4** | 前 4 条检索结果里，有没有召回到含正确答案的文档 | 71.7% | **94.0%** |
-| **avg_precision** | 召回的这些文档里，排名靠前的有多少真的相关 | 0.75 | **0.943** |
+| **avg_precision** | 召回的这些文档里，排名靠前的有多少真的相关 | 0.7458 | **0.9425** |
 | **pass_rate** | 最终答案里有没有覆盖住期望关键词 | 61.7% | 32.3% |
 
 **为什么 pass_rate 反而降了**：两套题库的 `expected_keywords` 来源不同——
@@ -116,6 +116,12 @@ reranker 只能对「已经召回的候选」重排，BM25 命中的精准文档
 而拆解本身也要调 LLM——所以我没开成默认，用 `.env` 的 `USE_MULTIHOP=1` 开关控制，
 理由是跨文档问题占比不高，但**开关存在说明可以按场景取舍**。
 
+> ⚠️ **别把这条开关说成"线上已经开着"**：`USE_MULTIHOP` 只被 `src/rag/rag_engine.py` 读取，
+> 由 `RAGEngine` 把 `MultiHopRetriever` 包在基础检索器外面；
+> **线上 Web 聊天走的是 ReAct/LangGraph Agent**，它的检索工具
+> `src/agent/tools/search_school_notices.py` 自建 `HybridRetriever`（BM25+向量+RRF 8/8），**不读这个开关**。
+> 上面这组数据来自离线评测 `scripts/eval_multihop.py`（`tests/eval_multihop_report.json`），线上默认仍是单跳。
+
 ### Q6：为什么用 ReAct Agent，而不是关键词路由？
 
 **答**：早期版本就是关键词路由（命中「课表」→ 调课表函数），问题很明显：
@@ -123,7 +129,9 @@ reranker 只能对「已经召回的候选」重排，BM25 命中的精准文档
 
 改成 Agent 之后，**选工具这件事交给 LLM**：
 LLM 看到「明天几点上课」和「我期末考啥」这两个问题，自己决定调 `get_user_schedule` 还是 `search_school_notices`。
-实现上用 LangChain 的 `AgentExecutor`（tool-calling ReAct），另有一套 LangGraph 实现，
+实现上是**手写的 ReAct 循环**（`src/agent/react_engine.py`：`ChatOpenAI.bind_tools` 把 4 个工具的 schema 注入 LLM，
+自己解析返回的 `tool_calls`、执行工具、把结果塞回 messages，最多 5 轮迭代），
+**没有用 LangChain 的 `AgentExecutor`**；另有一套 LangGraph 状态图实现（`src/agent/langgraph_engine.py`），
 靠 `USE_LANGGRAPH_AGENT` 环境变量切换，两套做对比实验。
 
 **关键工程点**：工具抛异常时**降级成字符串反馈**返回给 Agent，而不是让整个 Agent 崩掉——
@@ -135,6 +143,8 @@ Agent 看到「工具报错：xxx」还能自己换个工具重试。
 
 - 嵌入（bge-m3）：每次检索都要把文档转成向量，一天几千次。调 API 的话**钱和延迟都不可控**，而且文档库是固定的，本地跑一次就够。
 - 重排（bge-reranker-v2-m3）：同理，而且 reranker 对延迟更敏感（它要过 top-20 候选）。
+  代码里的重排后端是 **HuggingFace CrossEncoder**（`BAAI/bge-reranker-v2-m3`，`src/rag/retriever.py` 的 `BGEReranker`），
+  **不是 Ollama** —— 本地 CPU 推理 20s/问太慢，生产 `use_reranker=False`，只留作消融实验。
 - 答案生成：这一步需要理解能力、且输出长度不可控，**用大模型 API 才划算**。
 
 顺带一个**性能工程**的细节：本地嵌入走 **Ollama**，并且**常驻进程**不反复起停——
@@ -157,11 +167,11 @@ TTL 设 7 天，再加 ±10% 的随机抖动——抖动是为了**防缓存雪�
 
 ### Q9：定时抓取怎么保证不重复抓、不漏抓？
 
-**答**：靠一个 `crawl_state.json` 状态文件，记录每个监控面（20 个面 / 7 个子站）**上一次抓到的最新条目**。
+**答**：靠一个 `crawl_state.json` 状态文件，记录每个监控面（20 个面 / 6 个子站域名）**上一次抓到的最新条目**。
 每次抓取先拿列表页和状态文件比对，只处理比上次新的条目 → 天然幂等，重跑不会重复入库。
 清洗后追加进知识库并同步更新向量库和状态文件。
 
-Windows 任务计划每天 02:00 自动跑，`scripts/setup_scheduled_task.ps1` 负责装。
+Windows 任务计划每天 06:00 自动跑，`scripts/setup_scheduled_task.ps1` 负责装（任务名 `WXU_DailyCrawl_0600`，用 `pythonw.exe --once` 静默执行，机器当时关机会在下次开机后补跑）。
 
 ### Q10：多用户怎么隔离？
 
@@ -170,24 +180,39 @@ Windows 任务计划每天 02:00 自动跑，`scripts/setup_scheduled_task.ps1` 
 课表用 `class_id` 字段**按班级分桶**（24电信1/2/3 各自一桶），
 公共课（`class_id IS NULL`）对所有人可见，一句 SQL 就能取到「我的班级 + 公共课」。
 
-### Q11：多模态（拍照识图）是怎么接进来的？
+### Q11：多模态（图片识别 / OCR）是怎么接进来的？
 
-**答**：**不新建链路，只在链路前面加一个「把图片变成文字」的入口**。
+**答**：**不新建检索链路，只在链路前面加一个「把图片变成文字」的入口**。
+先说清**当前接到了哪一步**，别把没接的也说成接了。
 
-1. `image_assistant.py` 判断用户带的是图片还是文字。
-2. 带图片 → **YOLO-World** 做零样本检测。
-   零样本 = **不给它训练数据，直接用文字标签让它认**。这里用 YOLO-World 而不是普通 YOLO，
-   是因为普通 YOLO 只有 COCO 的 80 个固定类，校园里「教学楼」「自行车棚」根本不在里面；
-   YOLO-World 支持**开放词汇**，改类别就是改一行 `set_classes(["教学楼", "图书馆", ...])`。
-3. 同时走 **PaddleOCR** 提取图片里的文字（截图里的通知正文）。
-4. 检测结果 + OCR 文本拼成一条文本查询，接回同一条检索链路。
+**已经跑通的三条**：
+1. **拍照识图（独立页 `/look`）**：导航栏「拍照识图」→ 上传图片 → `POST /api/image/look`
+   → `src/web_app/image_assistant.py` 的 `look_at_image()`：**YOLO-World 认物** + **PaddleOCR 识字**
+   → 返回「认到的东西 / 读到的文字 / 人话总结」。CPU 密集，限流 10/min。
+2. **课表截图 → OCR → 结构化课表**：「上传中心」上传实验课截图/Excel，走 `src/curriculum/parser.py` 的
+   `extract_image_text()`（PaddleOCR）→ 解析成课程条目 → 按班级分桶入库。
+3. **OCR 模块能单独用**：`src/ocr/ocr_engine.py` 提供 `extract_text()` 和 `add_ocr_to_vectorstore()`，
+   命令行 `python src/ocr/ocr_engine.py <图片路径>` 可把图片里的文字落盘并入向量库。
+
+**还没接的（要主动交代）**：
+- **聊天框不支持发图**：`/api/chat` 只收文字参数；识别到"看图"意图时返回的是
+  「去上传中心把图片传上来」这类引导文案（`src/web_app/fastapi_app.py` 的 `image_ocr` 分支）；
+- 拍照识图的结果**不会自动回灌进对话**，用户得自己把内容说给聊天页；
+- Agent 侧确实有 `ocr_image` 工具（`src/agent/tools/ocr_image.py`），`dispatcher.handle_agent_stream` 也已经
+  支持 `image_path` 参数，但 `/api/chat` 这条路由**没传**（聊天框只收文字），所以 Agent 线上没有图片可识别。
+
+**识别能力本身**：`src/yolo/inference.py` 用 **YOLO-World** 做零样本检测
+（零样本 = **不给它训练数据，直接用文字标签让它认**）。用 YOLO-World 而不是普通 YOLO，
+是因为普通 YOLO 只有 COCO 的 80 个固定类，校园里「教学楼」「自行车棚」根本不在里面；
+YOLO-World 支持**开放词汇**，改类别就是改一行 `set_classes(["教学楼", "图书馆", ...])`，
+默认类别表 `DEFAULT_WORLD_CLASSES` 共 **41 个**校园物品。
 
 **权重不进版本库**：`src/yolo/inference.py` 里实现了「本地没有权重就自动从 ultralytics 下载并放回 `weights/`」，
 所以 clone 之后第一次跑会自动补齐，仓库不需要背着 32MB 模型。
 
 ### Q12：向量库怎么保证不是「残库」？
 
-**答**：构建向量库是**分批**做的（29376 块要跑很久）。断电/中断会留下半成品索引——
+**答**：构建向量库是**分批**做的（当前库 29631 块，整轮要跑很久）。断电/中断会留下半成品索引——
 一个只有一半文档的索引比没有索引更危险，因为它**看起来能用但答不全**。
 
 所以做了两件事：
@@ -210,7 +235,7 @@ Windows 任务计划每天 02:00 自动跑，`scripts/setup_scheduled_task.ps1` 
 | 坑 | 后果 | 怎么处理的 |
 |---|---|---|
 | pydantic v1/v2 不兼容 | 旧版 pickle 反序列化失败 | 启动时注入兼容补丁，且**失败会显式 warn**，不静默跳过 |
-| numpy 2.x 与 imgaug 0.4.0 不兼容 | PaddleOCR 导入失败 | 手动打 5 处补丁（`requirements.txt` 里有写） |
+| numpy 2.x 与 imgaug 0.4.0 不兼容 | PaddleOCR 导入失败 | `requirements.txt` 里**收录了** `imgaug==0.4.0`，但只留了一句「需手动打 5 处补丁」的文字说明（`imgaug.py` / `parameters.py` / `polys.py` / `meta.py`），**没有收录补丁脚本或具体改法** —— 全新机器装完 PaddleOCR 仍需自己手动处理 |
 | paddleocr 锁 opencv<=4.6 | 与 numpy 2.x 冲突 | 装完 paddleocr 再用 `--no-deps` 覆盖 opencv 版本 |
 | `dict.get(key, default)` 会**先求值 default** | 引用一个不存在的函数 → 每次调用都 NameError | dispatcher 里写错函数名，整条聊天链路 500。**教训：默认参数里的函数名不会被检查到「不存在」** |
 | 中文路径 + Windows 编码 | 读 `.gitignore` / 写文件出现乱码 | 统一 UTF-8；脚本读文件显式指定编码 |
@@ -225,7 +250,7 @@ Windows 任务计划每天 02:00 自动跑，`scripts/setup_scheduled_task.ps1` 
   试卷内容被截屏嵌进正常文档里就漏网。合规-拒绝类题目 pass_rate **0%**，这是真问题。
 - **BM25 中文切词覆盖不够**：jieba 用通用词表，校园特有词（奖学金类型简称）可能切不准，靠 bge-m3 语义救回一部分。
 - **单实例、无高可用**：缓存和监控都做了，但仍是单进程 FastAPI，真高可用要上 Docker Swarm / K8s。
-- **YOLO 校园场景泛化有限**：用的是固定类别集，不在类别里的物体识别不到。
+- **YOLO 校园场景泛化有限**：默认只用 41 个固定类别（`DEFAULT_WORLD_CLASSES`），不在类别里的物体识别不到。
 
 > 面试时**主动**说 2~3 条短板 + 「我下一步会怎么做」，比被追问出来强得多。
 > 说不完的短板说明没深入过。
@@ -238,9 +263,9 @@ Windows 任务计划每天 02:00 自动跑，`scripts/setup_scheduled_task.ps1` 
 |---|---|---|
 | 知识库规模 | **29631 文本块** | 2026-10-30 读 `data/faiss_db_bge/index.faiss` 的 `ntotal` |
 | 向量维度 | 1024 | bge-m3 输出维度 |
-| 监控面 | 20 个 / 7 个子站 | `scripts/daily_crawl.py` 配置 |
+| 监控面 | 20 个 / 6 个子站域名（7 类板块） | `scripts/daily_crawl.py` 的 `WATCHED_PAGES` |
 | 检索 recall@4 | **94.0%** | 300 题，2026-10-12 实跑 |
-| avg_precision | **0.943** | 同上 |
+| avg_precision | **0.9425** | 同上（`tests/eval_300_summary.json` 的 `avg_precision`） |
 | pass_rate（300 题） | 32.3%（97/300） | 同上，关键词口径偏严，见 Q4 |
 | pass_rate（60 题，历史） | 61.7%（37/60） | 2026-10-08 实跑，关键词口径偏松 |
 | 多跳 recall@4 | 75% → **100%** | 8 道跨文档题 |

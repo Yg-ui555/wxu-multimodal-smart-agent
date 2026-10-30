@@ -33,10 +33,13 @@
 # 1. 启动 Redis（如果需要真 Redis 而不是 fakeredis）
 docker run -d -p 6379:6379 --name wxu-redis --restart unless-stopped redis:7-alpine
 
-# 2. 启动 Ollama（如果用本地嵌入模型）
+# 2. 启动 Ollama（本地嵌入模型）
 ollama serve &
 ollama pull bge-m3
-ollama pull bge-reranker-v2-m3
+# 注意:重排(reranker)不走 Ollama。代码里的重排后端是 HuggingFace CrossEncoder
+#      (BAAI/bge-reranker-v2-m3,见 src/rag/retriever.py 的 BGEReranker),
+#      而且生产默认 use_reranker=False(本地 CPU 太慢,已做过评估)。
+#      只有跑消融实验才需要重排,首次调用会自动从 HuggingFace 下载(约 2.2GB)。
 
 # 3. 启动 FastAPI
 powershell -ExecutionPolicy Bypass -File start.ps1
@@ -46,92 +49,31 @@ powershell -ExecutionPolicy Bypass -File start.ps1
 
 ## 3. Docker Compose（生产环境）
 
-参考 `docker-compose.yml`：
+仓库根目录的 **`docker-compose.yml`** 就是可直接跑的那份（不是示例片段）：
 
-```yaml
-version: '3.8'
-
-services:
-  fastapi:
-    build: .
-    image: wxu-smart-agent:latest
-    ports:
-      - "7862:7862"
-    environment:
-      - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_BASE_URL=${LLM_BASE_URL}
-      - LLM_MODEL=${LLM_MODEL}
-      - REDIS_URL=redis://redis:6379/0
-      - USE_MULTIHOP=0   # 多跳默认关,需要时改 1
-    depends_on:
-      - redis
-      - ollama
-    volumes:
-      - ./data:/app/data   # 向量库 + 文档
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7862/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    command: redis-server --appendonly yes   # 持久化
-
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-    # 首次启动需要拉模型:
-    # docker exec -it <container> ollama pull bge-m3
-
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-    restart: unless-stopped
-
-volumes:
-  redis_data:
-  ollama_data:
-  grafana_data:
+```bash
+cp .env.example .env      # 填 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
+docker compose up -d
+docker compose logs -f fastapi
 ```
+
+包含 5 个服务：
+
+| 服务 | 作用 | 端口 |
+|---|---|---|
+| `fastapi` | 主服务（`Dockerfile` 构建，`build: .`） | 7862 |
+| `redis` | 答案缓存（带 AOF 持久化） | 6379 |
+| `ollama` | 本地嵌入 / 重排模型 | 11434 |
+| `prometheus` | 抓 `/metrics` + 加载告警规则 | 9090 |
+| `grafana` | 看板（默认账号密码 `admin`，生产请改 `GRAFANA_PASSWORD`） | 3000 |
+
+> `data/`（向量库 + 文档）和 `logs/` 用 bind mount 挂进容器，**不进镜像**——
+> 向量库几百 MB 且含校内资料，构建上下文里也用 `.dockerignore` 排掉了。
 
 ## 4. Prometheus 抓取配置
 
-`prometheus.yml`：
-
-```yaml
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: 'wxu-fastapi'
-    static_configs:
-      - targets: ['fastapi:7862']
-    metrics_path: /metrics
-```
+仓库根目录的 **`prometheus.yml`**：15 秒抓一次 `fastapi:7862/metrics`，
+并通过 `rule_files` 加载 **`prometheus-alerts.yml`**（告警规则单独放，便于评审和单独改）。
 
 ## 5. Grafana Dashboard 关键指标
 
@@ -181,38 +123,24 @@ USE_MULTIHOP=1   # 启用,跨文档题走 query 拆解 + RRF 融合
 USE_MULTIHOP=0   # 默认,单跳
 ```
 
+> ⚠️ 这个开关只被 `src/rag/rag_engine.py` 读取（由它包一层 `MultiHopRetriever`）。
+> **线上 Web 聊天走的是 ReAct/LangGraph Agent**，其检索工具
+> `src/agent/tools/search_school_notices.py` 自建 `HybridRetriever`，**不读这个开关** —— 线上默认仍是单跳。
+> 多跳的数据来自离线评测 `scripts/eval_multihop.py`。
+
 ## 9. 监控告警规则
 
-`prometheus.yml` 加 alert rules：
+告警规则在仓库根目录的 **`prometheus-alerts.yml`**（由 `prometheus.yml` 的 `rule_files` 加载）：
 
-```yaml
-groups:
-- name: wxu_alerts
-  rules:
-  - alert: HighP99Latency
-    expr: histogram_quantile(0.99, rate(wxu_qa_latency_seconds_bucket[5m])) > 10
-    for: 5m
-    labels:
-      severity: warning
-    annotations:
-      summary: "P99 延迟超过 10s"
+| 告警 | 触发条件 | 级别 |
+|---|---|---|
+| `HighP99Latency` | P99 延迟 > 10s 持续 5 分钟 | warning |
+| `HighErrorRate` | 错误率 > 0.1/s 持续 2 分钟 | critical |
+| `LowCacheHitRate` | 缓存命中率 < 30% 持续 10 分钟 | warning |
+| `ServiceBacklog` | 在飞请求数 > 20 持续 5 分钟 | warning |
 
-  - alert: HighErrorRate
-    expr: rate(wxu_qa_errors_total[5m]) > 0.1
-    for: 2m
-    labels:
-      severity: critical
-    annotations:
-      summary: "错误率超过 10%"
-
-  - alert: LowCacheHitRate
-    expr: rate(wxu_cache_hits_total[5m]) / (rate(wxu_cache_hits_total[5m]) + rate(wxu_cache_misses_total[5m])) < 0.3
-    for: 10m
-    labels:
-      severity: warning
-    annotations:
-      summary: "缓存命中率低于 30%"
-```
+> 阈值是**拍的起步值**，生产环境要按自己的 SLO 调 —— 面试时最好这么讲，
+> 而不是「这个阈值是精确算出来的」。
 
 ## 10. 压测验证
 

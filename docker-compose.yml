@@ -1,0 +1,87 @@
+# ============================================================
+# WXU Multimodal Smart Agent —— 生产环境 Docker Compose
+# 用法：
+#   cp .env.example .env    # 填 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
+#   docker compose up -d
+#   docker compose logs -f fastapi
+#
+# 说明：
+#   · data/ 用 bind mount 挂进容器 —— 向量库和文档不入镜像（体积大且含校内资料）
+#   · ollama 首次启动后需要手动拉模型：
+#       docker compose exec ollama ollama pull bge-m3
+#       （重排不走 Ollama：代码用的是 HuggingFace CrossEncoder BAAI/bge-reranker-v2-m3，
+#        而且生产默认 use_reranker=False，只有跑消融实验才需要）
+#   · grafana 首次登录用 GF_SECURITY_ADMIN_PASSWORD（默认 admin，生产务必改）
+# ============================================================
+
+services:
+  fastapi:
+    build: .
+    image: wxu-smart-agent:latest
+    ports:
+      - "7862:7862"
+    environment:
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
+      - REDIS_URL=redis://redis:6379/0
+      - USE_MULTIHOP=0          # 多跳默认关（延迟优先），需要时改 1
+      - USE_LANGGRAPH_AGENT=0    # 默认走 react_engine；改 1 切 LangGraph 状态图
+    depends_on:
+      - redis
+      - ollama
+    volumes:
+      - ./data:/app/data        # 向量库 + 文档
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7862/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes   # 持久化
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  ollama_data:
+  grafana_data:

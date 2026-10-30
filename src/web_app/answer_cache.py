@@ -40,6 +40,7 @@ import time
 import hashlib
 import random
 import logging
+import threading
 from collections import OrderedDict
 from typing import Optional, Dict, Any
 
@@ -142,34 +143,66 @@ def _get_redis():
 # 3) 进程内 LRU 兜底(永远可用)
 # ============================================================
 class _MemoryLRU:
-    """最简 LRU 缓存,只在 Redis/fakeredis 都不可用时使用"""
+    """最简 LRU 缓存,只在 Redis/fakeredis 都不可用时使用
+
+    2026-10-30 修两个问题:
+      1) set() 收了 ex(TTL)参数但**完全忽略** —— 内存兜底模式下条目永不过期。
+         注释里写的 "TTL 强制走 self.default_ttl" 里的 self.default_ttl
+         这个属性压根不存在,属于骗人的注释。现在真的按 ex 记过期时间。
+      2) 没有锁。FastAPI 多线程下 get/set/popitem 并发会撞 KeyError。
+    """
+    DEFAULT_TTL = 7 * 24 * 3600   # 与 AnswerCache.DEFAULT_TTL 保持一致
+
     def __init__(self, max_size: int = 1000):
         self.max_size = max_size
-        self._cache: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+        # key -> (过期时间戳, 值);过期时间戳为 None 表示永不过期
+        self._cache: "OrderedDict[str, tuple[Optional[float], str]]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _expired(self, expire_at: Optional[float]) -> bool:
+        return expire_at is not None and expire_at <= time.time()
 
     def get(self, key: str) -> Optional[str]:
-        if key not in self._cache:
-            return None
-        ts, val = self._cache[key]
-        self._cache.move_to_end(key)
-        return val
+        with self._lock:
+            if key not in self._cache:
+                return None
+            expire_at, val = self._cache[key]
+            if self._expired(expire_at):
+                del self._cache[key]
+                return None
+            self._cache.move_to_end(key)
+            return val
 
     def set(self, key: str, val: str, ex: Optional[int] = None):
-        """set(key, val, ex=ttl_seconds) — TTL 强制走 self.default_ttl(2026-10-12 收尾修复)"""
-        self._cache[key] = (time.time(), val)
-        self._cache.move_to_end(key)
-        while len(self._cache) > self.max_size:
-            self._cache.popitem(last=False)
+        """set(key, val, ex=ttl_seconds) —— ex 真的生效,过期即淘汰"""
+        with self._lock:
+            ttl = self.DEFAULT_TTL if ex is None else int(ex)
+            expire_at = time.time() + ttl if ttl > 0 else None
+            self._cache[key] = (expire_at, val)
+            self._cache.move_to_end(key)
+            while len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)
 
     def ttl(self, key: str) -> int:
         """fakeredis/redis-py 兼容接口:返回 key 剩余 TTL(秒)
         Returns:
-            -2 = key 不存在, 0 = 没设 TTL(我们用 0 表示"立即过期"但其实 caller 不会用)
+            -2 = key 不存在
+            -1 = key 存在但没有过期时间
+            >=0 = 剩余秒数
         """
-        if key not in self._cache:
-            return -2
-        # 2026-10-12 收尾修复:之前写错 if False else 0,现在按"max-size LRU"语义返 0
-        return 0
+        with self._lock:
+            if key not in self._cache:
+                return -2
+            expire_at, _ = self._cache[key]
+            if expire_at is None:
+                return -1
+            remaining = int(expire_at - time.time())
+            return remaining if remaining > 0 else 0
+
+    def delete(self, key: str) -> int:
+        """删掉一个 key(缓存失效时用)"""
+        with self._lock:
+            return 1 if self._cache.pop(key, None) is not None else 0
 
     def ping(self):
         return True

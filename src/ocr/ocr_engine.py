@@ -170,7 +170,6 @@ def add_ocr_to_vectorstore(
     from langchain_core.documents import Document
 
     # 用项目根绝对路径,避免 cwd 不在项目根时相对路径解析失败
-    project_root = Path(__file__).resolve().parent.parent.parent
     vsm = VectorStoreManager(
         persist_directory=str(project_root / "data" / "faiss_db_bge")
     )

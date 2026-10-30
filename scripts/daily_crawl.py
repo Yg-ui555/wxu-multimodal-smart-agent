@@ -8,7 +8,7 @@
 - 会议安排
 
 工作流：
-1. 每天 18:00（默认）或首次启动时抓取每个监控页面的列表
+1. 每天 06:00（默认）或首次启动时抓取每个监控页面的列表
 2. 跟 crawl_state.json 比对，只抓"新增"的详情
 3. 用 scrape_url.py 的工具提取正文 → 保存为 .txt → data/docs/学校通知/
 4. 调 scripts/add_new_docs.py 增量入向量库
@@ -16,7 +16,13 @@
 
 两种模式：
   --once   跑一次（手动测试 / Windows Task Scheduler）
-  (无参)  daemon 模式（APScheduler 每天 18:00 自动跑）
+  (无参)  daemon 模式（APScheduler 每天 06:00 自动跑）
+
+⚠️ 抓取时间口径:2026-10-30 统一为 **06:00**。
+   之前 daemon 默认 18:00、而 scripts/setup_scheduled_task.ps1 注册的
+   Windows 任务是 06:00(任务名 WXU_DailyCrawl_0600) —— 同一个项目两个默认
+   时间,很容易改成跟机器上实际跑的不一致。现在两边统一 06:00,
+   daemon 模式仍可用 `--time HH:MM` 覆盖。
 
 用法：
   python scripts/daily_crawl.py --once       # 跑一次
@@ -616,8 +622,8 @@ def run_crawl_once(state):
     return stats
 
 
-def run_daemon(schedule_time="18:00"):
-    """daemon 模式：每天定时跑"""
+def run_daemon(schedule_time="06:00"):
+    """daemon 模式：每天定时跑(默认 06:00,与 setup_scheduled_task.ps1 一致)"""
     try:
         from apscheduler.schedulers.blocking import BlockingScheduler
     except ImportError:
@@ -640,8 +646,8 @@ def run_daemon(schedule_time="18:00"):
         if not (0 <= hh <= 23 and 0 <= mm <= 59):
             raise ValueError
     except ValueError:
-        LOG.error(f"schedule_time 格式错误: {schedule_time!r},应为 HH:MM,回退到 18:00")
-        hh, mm = 18, 0
+        LOG.error(f"schedule_time 格式错误: {schedule_time!r},应为 HH:MM,回退到 06:00")
+        hh, mm = 6, 0
 
     # 按 schedule_time 定时跑
     scheduler.add_job(job, 'cron', hour=hh, minute=mm, id='daily_crawl')
@@ -665,7 +671,7 @@ def run_daemon(schedule_time="18:00"):
 def main():
     parser = argparse.ArgumentParser(description="每日抓取无锡学院官网通知")
     parser.add_argument("--once", action="store_true", help="跑一次（默认 daemon 模式）")
-    parser.add_argument("--time", default="18:00", help="daemon 模式下每天的运行时间 (HH:MM)")
+    parser.add_argument("--time", default="06:00", help="daemon 模式下每天的运行时间 (HH:MM,默认 06:00,与 Windows 任务计划一致)")
     parser.add_argument("--reset", action="store_true", help="重置 state（强制全量抓取）")
     args = parser.parse_args()
 

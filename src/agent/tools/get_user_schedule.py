@@ -4,6 +4,7 @@ Tool 2: get_user_schedule
 关键设计:uid 通过 context 注入(避免函数参数被 LLM 误传)
 """
 import logging
+from contextvars import ContextVar
 from datetime import date
 
 from langchain_core.tools import tool
@@ -16,16 +17,27 @@ log = logging.getLogger("agent.tools.get_user_schedule")
 # ===== context 注入机制 =====
 # LLM 看到的 tool schema 只暴露 "scope" 参数(uid 由后端注入,不让 LLM 传)
 # 实际调用时由 ReAct 引擎在 invoke 前 set_current_uid() 一次
-_current_uid_holder = {"uid": None}
+#
+# 2026-10-30 修复:原来是模块级可变 dict,FastAPI 并发下会串号 ——
+#   用户 A 的请求跑到一半,用户 B 的请求改写了同一个 dict,
+#   A 调 get_user_schedule 时拿到的却是 B 的 uid(跨用户数据泄露)。
+#   改用 contextvars.ContextVar:值跟着"当前执行上下文"走,
+#   每个请求/每个线程各自一份,互不干扰。
+_current_uid: ContextVar[str] = ContextVar("wxu_current_uid", default="")
 
 
 def set_current_uid(uid: str) -> None:
-    """ReAct 引擎在每次 tool 调用前调用此函数注入当前用户的 uid"""
-    _current_uid_holder["uid"] = uid
+    """ReAct 引擎在每次 tool 调用前调用此函数注入当前用户的 uid
+
+    注意:必须在**紧邻 tool.invoke() 之前**调用,不要只在请求入口调一次。
+    流式路径下 Starlette 会把 sync generator 拆到不同线程/上下文里跑,
+    只有"设值 + 读值"发生在同一段代码里才保证一致。
+    """
+    _current_uid.set(uid or "")
 
 
 def _get_current_uid() -> str:
-    return _current_uid_holder["uid"] or ""
+    return _current_uid.get()
 
 
 # 周几中文映射(LLM 看 scope="weekday_3" 也知道是周三)

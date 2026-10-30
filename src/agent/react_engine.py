@@ -23,6 +23,7 @@ ReAct 引擎(2026-10-09 新增)
 import json
 import logging
 import os
+import time
 from typing import Iterator, List, Dict, Any
 
 from dotenv import load_dotenv
@@ -38,6 +39,9 @@ from src.agent.tools import ALL_TOOLS, TOOL_MAP
 # context 注入 setter
 from src.agent.tools.get_user_schedule import set_current_uid
 from src.agent.tools.ocr_image import set_current_image
+
+# Prometheus 埋点(软依赖,没装 prometheus_client 也不影响 Agent)
+from src.agent.metrics import observe_tool_call
 
 log = logging.getLogger("agent.react_engine")
 
@@ -121,8 +125,9 @@ def agent_run(user_query: str,
         }
     """
     # 0. context 注入(让 get_user_schedule / ocr_image 知道当前用户和图片)
-    if uid:
-        set_current_uid(uid)
+    #    2026-10-30:改到"紧邻 tool.invoke()"处设置(见下面的 2.3.1 / 2.5.1)。
+    #    这里提前设一次在并发 + 流式下不可靠 —— Starlette 会把 sync generator
+    #    拆到不同线程/上下文跑,请求入口设的值到 tool 执行时可能已经不是本次的了。
 
     # 1. 构造 messages 列表
     messages = [SystemMessage(content=SYSTEM_PROMPT.format(
@@ -175,11 +180,18 @@ def agent_run(user_query: str,
             if tool_name not in TOOL_MAP:
                 result = f"(未知工具: {tool_name},你只能调: {list(TOOL_MAP.keys())})"
             else:
+                t_start = time.time()
                 try:
+                    # ★ 紧邻 invoke 设 uid —— 见 get_user_schedule 里的说明:
+                    #   contextvars 只在"设值 + 读值"处于同一段代码时可靠,
+                    #   所以不能只在请求入口设一次。
+                    set_current_uid(uid)
                     result = TOOL_MAP[tool_name].invoke(tool_args)
                 except Exception as e:
                     log.exception(f"tool {tool_name} 失败")
                     result = f"(工具执行失败: {type(e).__name__}: {e})"
+                finally:
+                    observe_tool_call(tool_name, time.time() - t_start)
 
             # 2.3.2 截断防 token 爆炸
             if isinstance(result, str) and len(result) > 4000:
@@ -220,10 +232,8 @@ def agent_stream(user_query: str,
         - 工具调用:  "...[🔧 正在调 XX]..."  (前端的 "[🔧" 标记可做特殊渲染)
     """
     # 0. context 注入
-    if uid:
-        set_current_uid(uid)
-    if image_path:
-        set_current_image(image_path)
+    #    2026-10-30:改到"紧邻 tool.invoke()"处设置(见下面的 2.5.1),
+    #    原因同 agent_run —— 流式下请求入口设的值不可靠。
 
     # 1. 构造 messages
     messages = [SystemMessage(content=SYSTEM_PROMPT.format(
@@ -285,10 +295,18 @@ def agent_stream(user_query: str,
             if tool_name not in TOOL_MAP:
                 result = f"(未知工具: {tool_name})"
             else:
+                t_start = time.time()
                 try:
+                    # ★ 紧邻 invoke 设 context(uid / 图片路径)。
+                    #   流式路径下 Starlette 把 sync generator 拆到不同线程跑,
+                    #   只有在这里设值才能保证跟这次 invoke 在同一上下文。
+                    set_current_uid(uid)
+                    set_current_image(image_path)
                     result = TOOL_MAP[tool_name].invoke(tool_args)
                 except Exception as e:
                     result = f"(工具执行失败: {type(e).__name__}: {e})"
+                finally:
+                    observe_tool_call(tool_name, time.time() - t_start)
 
             # 2.5.2 截断
             if isinstance(result, str) and len(result) > 4000:

@@ -50,8 +50,11 @@ PROGRESS_FILE_NAME = "build_progress.json"
 #      对 __fields_set__ 字段做了更严格检查
 # 临时方案：给缺失字段兜底，确保反序列化能完成
 #
-# 正式方案：升级 Python 到 3.10+ + langchain-community 到 0.3+（已放弃 3.8 支持）
-# TODO: 用户升级 Python 后删除本段兼容代码
+# 正式方案：用 Python 3.11 重建一次向量库，pickle 自然就是 pydantic v2 写的，之后可删本段
+# 当前状态（2026-10-30）：Python 已经升到 3.11.9，但 data/faiss_db_bge 里的
+#   documents.pkl 仍是 9/16 在 Python 3.8 下生成的 —— 所以补丁暂时还不能删。
+#   删除前置条件：在 3.11 下跑一次 `python src/rag/build_vectorstore.py` 重建向量库，
+#   确认不再抛 __fields_set__ 之后，再把下面这段兼容代码删掉。
 # ============================================================
 def _compat_patch_for_legacy_pickle():
     """给 pydantic v1 compat 的 BaseModel.__setstate__ 兜底缺字段。幂等。"""

@@ -238,5 +238,5 @@ LLM 组织语言回复
 
 - [9.17 上午+中午日报](README.md)
 - [9.15-17 三天总结](../2026-09-15-17/SUMMARY.md)
-- [面试 cheat sheet](../interview_prep_tech_details.md)
-- [Bad case 报告](../../tests/bad_case_report.md)
+- [面试 cheat sheet](../../interview_prep_tech_details.md)
+- [Bad case 报告](../../../tests/bad-case-report.md)

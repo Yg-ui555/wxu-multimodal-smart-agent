@@ -1,6 +1,6 @@
 # 无锡学院多模态校园智能助手
 
-> 基于 RAG + YOLO-World + PaddleOCR + ReAct Agent 的校园智能助手。支持自然语言问答、拍照识图、图片文字提取；嵌入与重排模型全部本地运行，仅答案生成调用大模型 API。
+> 基于 RAG + YOLO-World + PaddleOCR + ReAct Agent 的校园智能助手。支持自然语言问答与带原文引用的检索；图片能力有**独立入口**：导航栏「拍照识图」页（`/look`）上传图片 → YOLO-World 认物 + PaddleOCR 识字，「上传中心」的课表截图走 OCR 解析 —— 聊天框本身只收文字。嵌入在本地 Ollama 跑，只有答案生成调用大模型 API。
 
 ---
 
@@ -9,12 +9,12 @@
 | 模块 | 能力 |
 |---|---|
 | **智能问答** | 基于校内文档知识库（教务处通知、课程讲义、奖学金政策等）的自然语言问答，附原文引用 |
-| **ReAct 智能体** | 4 个工具的真正 LLM 决策型 Agent：校园通知检索(RAG) / 我的课表 / 图片 OCR / 实时联网，工具调用 + 推理链 + 追问兜底（而不是规则路由 + LLM 包装） |
-| **拍照识图** | 上传校园建筑照片，YOLO-World 零样本识别后自动查询相关资料 |
-| **图片识字** | 截图/拍照中的文字通过 PaddleOCR 提取，转文本后送入检索 |
+| **ReAct 智能体** | 4 个工具的真正 LLM 决策型 Agent（**手写 ReAct 循环 + `bind_tools`**，另有一套 LangGraph 状态图可切换）：校园通知检索(RAG) / 我的课表 / 图片 OCR / 实时联网，工具调用 + 推理链 + 追问兜底（而不是规则路由 + LLM 包装） |
+| **拍照识图** | 独立页面 `/look`（导航栏「拍照识图」）：上传图片 → **YOLO-World 开放词汇认物**（默认 41 个校园类别）+ **PaddleOCR 识字**，输出「认到的东西 / 读到的文字 / 人话总结」，接口 `POST /api/image/look`（限流 10/min，CPU 密集） |
+| **图片识字** | `src/ocr/ocr_engine.py` 提供 `extract_text()` / `add_ocr_to_vectorstore()`；命令行 `python src/ocr/ocr_engine.py <图片路径>` 可把 OCR 文本落盘并入向量库 |
 | **多轮对话** | 分层记忆（近期完整 + 历史摘要），支持上下文指代 |
 | **多用户多会话** | 浏览器 UUID 隔离用户，豆包式左侧会话列表，每会话独立持久化 |
-| **文档上传** | 支持 PDF / Word / TXT / Markdown 五种格式，自动去重并入向量库 |
+| **文档上传** | 支持 PDF / Word(.docx/.doc) / TXT / Markdown 共 5 种格式，单文件 ≤50MB，自动去重并入向量库 |
 | **班级维度课表** | PDF 课表按班级归类（24电信1/2/3 分桶存储），实验课上传自动按"我的班级"过滤入表，公共课 + 我的班级课程合并渲染 |
 | **周次自动判断** | 用户配置开学日后，/schedule 自动算出当前是第几周，无需每次手动切 |
 | **通知爬虫** | 定时抓取教务处通知，清洗后自动追加进知识库 |
@@ -24,44 +24,46 @@
 ## 🏗️ 系统架构
 
 ```
-用户输入（文字 / 图片）
+【聊天】用户输入文字
     │
-    ├── 纯文字 ──────────────────────────────┐
-    │                                         ▼
-    └── 带图片 → YOLO-World 识别 / PaddleOCR 提取文字
-                    │                        │
-                    └──── 转为文本 ───────────┘
-                                         │
-                                         ▼
-                          意图判断（知识库 / 闲聊 / 快捷指令）
-                                         │
-                    ┌────────────────────┴────────────────────┐
-                    ▼                                         ▼
-          快捷指令直达                           ReAct Agent 自主决策
-          （课表 / 上传 / OCR）                   ├─ 校内通知检索（RAG）
-                                                   ├─ 我的课表
-                                                   ├─ 图片 OCR
-                                                   └─ 联网兜底
-                    └────────────────────┬────────────────────┘
-                                         ▼
-                    ┌──────── 混合检索（Hybrid Retriever）────────┐
-                    │                                              │
-                    ├── BM25 关键词检索（词面精确匹配）            │
-                    ├── 向量检索（bge-m3 语义相似度）              │
-                    └── RRF 融合（两路排名加权合并）               │
-                                         │                        │
-                                         ▼                        │
-                              bge-reranker-v2-m3 重排             │
-                              （top-20 → top-4）                   │
-                                         │                        │
-                                         ▼                        │
-                              LLM 生成答案 + 引用来源             │
+    ▼
+    意图判断（知识库 / 闲聊 / 快捷指令）
+    │
+    ┌────────────────────┴────────────────────┐
+    ▼                                         ▼
+  快捷指令直达                           ReAct Agent 自主决策
+  （课表 / 上传 / OCR）                   ├─ 校内通知检索（RAG）
+                                            ├─ 我的课表
+                                            ├─ 图片 OCR
+                                            └─ 联网兜底
+    └────────────────────┬────────────────────┘
+                         ▼
+    ┌──────── 混合检索（Hybrid Retriever）────────┐
+    │                                              │
+    ├── BM25 关键词检索（词面精确匹配，top-8）     │
+    ├── 向量检索（bge-m3 语义相似度，top-8）       │
+    └── RRF 融合（两路排名加权合并，k=60）        │
+                         │                        │
+                         ▼                        │
+              top-4（生产不挂 reranker：          │
+              HF CrossEncoder 太慢，见评估决策）   │
+                         │                        │
+                         ▼                        │
+              LLM 生成答案 + 引用来源             │
+
+【拍照识图】独立页 /look（不进聊天链路）
+    上传图片 → YOLO-World 认物 + PaddleOCR 识字 → 认到的东西 / 读到的文字 / 人话总结
+    （结果不会自动回灌进对话）
 ```
+
+> ⚠️ **聊天框只收文字**：图片从独立的「拍照识图」页（`/look`）进；
+> `dispatcher.handle_agent_stream` 虽然已经支持 `image_path` 参数，但 `/api/chat` 这条路由没传（聊天框只收文字），
+> 所以 Agent 的 `ocr_image` 工具在聊天链路里拿不到图片。
 
 **检索链路核心设计**：
 - **双路检索**：BM25 抓精确匹配，向量抓语义/同义词，互补
 - **RRF 融合**：`score = Σ 1/(k + rank)`，k=60，避免单一检索的盲区
-- **重排器**：本地 Ollama 跑 bge-reranker-v2-m3，对候选重排提升准确率
+- **重排器（默认关闭）**：代码里的重排后端是 **HuggingFace CrossEncoder**（`BAAI/bge-reranker-v2-m3`，见 `src/rag/retriever.py` 的 `BGEReranker`），本地 CPU 推理太慢（20s/问），实测加上反而掉点 —— 生产 `use_reranker=False`，只在 `scripts/eval_runner.py --upper-bound` 做对比实验
 
 ---
 
@@ -70,10 +72,10 @@
 | 类别 | 选型 | 说明 |
 |---|---|---|
 | Python | 3.11.9 | |
-| Web UI | FastAPI 0.118 + Jinja2 | 多页应用（问答 / 课表 / 奖学金 / 校园生活 / 上传中心），豆包式多 session 界面 |
+| Web UI | FastAPI 0.141 + Jinja2 | 多页应用（问答 / 课表 / 奖学金 / 校园生活 / 上传中心），豆包式多 session 界面 |
 | 向量库 | FAISS-CPU 1.15.1 | 本地存储，29631 文本块（1024 维，2026-10-30 实测 `index.faiss`） |
 | 嵌入模型 | bge-m3（Ollama 本地） | 中文语义向量，零 API 成本 |
-| 重排模型 | bge-reranker-v2-m3（Ollama 本地） | |
+| 重排模型 | bge-reranker-v2-m3（HuggingFace CrossEncoder，本地 CPU） | 只有「评估上限」模式才开，生产默认关闭（CPU 太慢，见评估决策） |
 | 关键词检索 | rank-bm25 | |
 | 文档解析 | PyMuPDF / python-docx / beautifulsoup4 | |
 | 图像识别 | YOLO-World（ultralytics） | 零样本检测，无需自训练 |
@@ -100,11 +102,11 @@
 | **通过率 pass_rate** | 61.7% | 32.3% (97/300) | LLM 答案简洁，未必把 expected_keywords 全放进去（**详见下方"为什么 pass_rate 反而下降"**）|
 | **召回率 recall@4** | 71.7% | **94.0%** ↑ 22% | RAG 召回**真实能力大幅提升**（29496 chunks + 改进停用词）|
 | **答案命中率 answer_hit** | 85.0% | 37.0% | LLM 答得短/口语化，关键词覆盖不够 |
-| **平均精度 avg_precision** | 0.75 | **0.943** ↑ 0.19 | 召回到的文档 94.3% 包含目标关键词 |
+| **平均精度 avg_precision** | 0.7458 | **0.9425** ↑ 0.20 | 召回到的文档 94.25% 包含目标关键词 |
 | **中位延迟 p50** | 3.01s | 2.01s | 优化后比老版快 1 秒 |
 | **p90 延迟** | 3.69s | 2.68s | |
 | **合规违规 banned_violations** | 4 | 26 | 合规 prompt 仍是真问题（ID 17/19/22/59 同根）|
-| **向量库规模** | 29447 chunks | 29496 chunks | |
+| **向量库规模** | 旧索引（规模未留档） | 29496 块（2026-10-12 实跑，`logs/app.log.2026-10-12` 可查） | 当前实测 **29631 块**（2026-10-30 读 `index.faiss` 的 `ntotal`） |
 
 > ⚠️ **诚实版**（2026-10-12）：
 > - **300 题 pass_rate 32.3% 看着比 60 题 61.7% 低，但 RAG 真实能力是涨的**（recall@4 71.7% → 94%）
@@ -122,18 +124,18 @@
 | 通过率 pass_rate | **61.7%** （37 / 60） |
 | 召回率 recall@4 | **71.7%** |
 | 答案命中率 answer_hit | 85.0% |
-| 平均精度 avg_precision | 0.75 |
+| 平均精度 avg_precision | 0.7458 |
 | 中位延迟 p50 | **3.01s** |
 | 平均延迟 avg | 2.93s |
 | p90 延迟 | 3.69s |
 | 合规违规 banned_violations | 4 |
-| 向量库规模 | 29447 chunks |
+| 向量库规模 | 2026-10-08 跑的旧索引（规模未留档）；当前库 **29631 块** |
 
 > 注：旧的"86.7%"是 15 题 + 开了 BGE-reranker 的**评估上限**配置（已并入下面的"上限"对比表），并非线上真实通过率。
 
 ### 评估上限（用于看能力天花板）
 
-> 配置：纯 `bge-m3` 向量 + **BGE-reranker-v2-m3 精排** + 5/5 双路
+> 配置：纯 `bge-m3` 向量 + **BGE-reranker-v2-m3 精排**（HuggingFace CrossEncoder，本地 CPU）+ 5/5 双路
 > 与线上唯一不同：开 bge-reranker + 关 BM25
 > 跑分时启用：`python scripts/eval_runner.py --upper-bound --label upper_bound`
 
@@ -190,7 +192,7 @@ python scripts/eval_runner.py --vs eval_baseline.json --html report.html
 | 失败兜底 | 30 | 3 | 10.0% | banned 词防不住 |
 | 合规-元信息 | 12 | 2 | 16.7% | 合规 prompt 漏 |
 | **合规-拒绝** | **18** | **0** | **0%** | **真问题，prompt 关键词屏蔽不够**（同 60 题根因）|
-| 政策-创业 | 1 | 0 | 0% | KB 可能没资料 |
+| 政策-创业 | 1 | 1 | 100% | 单题样本量小，通过 |
 | 政策-心理 | 1 | 0 | 0% | KB 可能没资料 |
 | 同义词 | 1 | 0 | 0% | 单题样本量太小 |
 | 数字表格-食堂 | 1 | 0 | 0% | 单题 |
@@ -200,7 +202,7 @@ python scripts/eval_runner.py --vs eval_baseline.json --html report.html
 - 🟢 **强项**：办事流程/数学/选课/数字表格-宿舍/课程/学分 → 100%（KB 资料明确）
 - 🟡 **中等**：奖学金/转专业/图书馆/同义词（65-50%）→ KB 资料够，LLM 答题覆盖度需调
 - 🔴 **短板**：合规-拒绝 0% / 合规-元信息 16.7% → **和 60 题同根**，prompt 关键词屏蔽不够
-- 🔴 **可能缺资料**：政策-创业/心理 → 建议补 KB
+- 🔴 **可能缺资料**：政策-心理（0/1）→ 建议补 KB；政策-创业这题实际是 100%（1/1，单题样本量太小，别当结论）
 
 ### 多跳检索对比（2026-10-12 新增）
 
@@ -228,13 +230,19 @@ python scripts/eval_runner.py --vs eval_baseline.json --html report.html
 
 **开关**：`.env` 加 `USE_MULTIHOP=1` 启用，默认关闭（避免影响线上 latency）。
 
+> ⚠️ **这条开关只作用于 `src/rag/rag_engine.py` → `src/rag/multi_hop.py` 那条链路**：
+> 只有 `RAGEngine` 读到 `USE_MULTIHOP=1` 才会把 `MultiHopRetriever` 包在基础检索器外面。
+> **线上 Web 聊天走的是 ReAct/LangGraph Agent**（`src/agent/react_engine.py`），
+> 它的检索工具 `src/agent/tools/search_school_notices.py` 自建 `HybridRetriever`（BM25+向量+RRF 8/8），**不读这个开关**。
+> 所以上面这组多跳数据来自**离线评测** `scripts/eval_multihop.py`，线上默认仍是单跳。
+
 **面试话术**（背诵版）：
 > "RAG 怎么处理复杂问题？我做了**多跳检索**——LLM 把 query 拆成 2-3 个独立子问题，每跳独立走混合检索，RRF 融合。跨文档题 recall@4 从 75% 涨到 100%，延迟只涨 6%。最关键的是 0.5s 的 LLM 拆解换来 25 个百分点的召回提升，比跑 reranker 划算多了。"
 
 ### 工程化：Redis 缓存 + Prometheus 监控（2026-10-12 新增）
 
 > 解决 README "单实例无高可用"短板 + 提升线上 QPS
-> 跑分：`python tests/locustfile.py --host=http://localhost:7862 -u 20 -r 5 -t 60s --headless --html tests/load_test_report.html`
+> 跑分：`locust -f tests/locustfile.py --host=http://localhost:7862 -u 20 -r 5 -t 60s --headless --html tests/load_test_report.html`
 > 实跑数据：2026-10-12 16:43，20 并发 60 秒
 
 **核心指标**（20 并发 × 60 秒压测）：
@@ -266,19 +274,24 @@ python scripts/eval_runner.py --vs eval_baseline.json --html report.html
    高性能                 零部署              永远可用
 ```
 
-**Prometheus 指标**（15 个）：
-- `wxu_qa_requests_total{intent, status}` - 流量
-- `wxu_qa_latency_seconds{intent}` - 延迟直方图（p50/p90/p99）
-- `wxu_qa_in_flight` - 在飞请求数
-- `wxu_qa_errors_total{error_type}` - 错误
-- `wxu_cache_hits_total / misses_total / skipped_total` - 缓存
-- `wxu_agent_tool_calls_total{tool_name}` - Agent 工具
-- `wxu_rag_docs_retrieved` - 召回条数
+**Prometheus 指标**（10 个，指标名以 `src/web_app/monitoring.py` 为准）：
+- `wxu_qa_requests_total{intent, status}` - Counter：流量
+- `wxu_qa_latency_seconds{intent}` - Histogram：延迟直方图（p50/p90/p99）
+- `wxu_agent_tool_call_seconds{tool_name}` - Histogram：单次工具调用耗时
+- `wxu_qa_errors_total{error_type}` - Counter：错误
+- `wxu_qa_in_flight` - Gauge：在飞请求数（服务积压告警用）
+- `wxu_cache_hits_total` / `wxu_cache_misses_total` / `wxu_cache_skipped_total` - Counter：缓存命中/未命中/跳过
+- `wxu_agent_tool_calls_total{tool_name}` - Counter：Agent 工具调用次数
+- `wxu_rag_docs_retrieved` - Histogram：每次召回的文档条数
+
+> 注：Histogram 类型在 Prometheus 里会展开成多条时间序列（`_bucket`/`_sum`/`_count`），
+> 所以 `/metrics` 端点上的序列条数多于指标名个数 —— 说「10 个指标」指指标名，别按序列数说。
+> 另：`wxu_uid` / `wxu_sid` / `wxu_nick` 是这些指标的**标签名**，不是独立指标。
 
 **部署**：`docs/deployment.md` 写了完整的 Docker Compose + Grafana Dashboard 配置。
 
 **面试话术**（背诵版）：
-> "工程化我做了三件事：①**Redis 缓存**，相同 query 直接返，第一次问 21s 第二次 2s，加速 10 倍，TTL 7 天加 ±10% 抖动防雪崩；②**三级降级**，真 Redis → fakeredis → 进程内 LRU，永远不会让缓存层挂掉业务；③**Prometheus 监控**，15 个指标含 QPS / p50/p90/p99 / 错误率 / 缓存命中率，挂 `/metrics` 端点给 Grafana 抓。"
+> "工程化我做了三件事：①**Redis 缓存**，相同 query 直接返，第一次问 21s 第二次 2s，加速 10 倍，TTL 7 天加 ±10% 抖动防雪崩；②**三级降级**，真 Redis → fakeredis → 进程内 LRU，永远不会让缓存层挂掉业务；③**Prometheus 监控**，10 个指标含 QPS / p50/p90/p99 / 错误率 / 缓存命中率，挂 `/metrics` 端点给 Grafana 抓。"
 
 ---
 
@@ -299,10 +312,13 @@ pip install opencv-contrib-python==4.10.0.84 --no-deps
 ### 2. 本地模型（Ollama）
 
 ```bash
-# 安装 Ollama 后拉取中文嵌入与重排模型
+# 安装 Ollama 后拉取中文嵌入模型（检索链路只依赖它）
 ollama pull bge-m3
-ollama pull bge-reranker-v2-m3
 ```
+
+> 重排模型（`BAAI/bge-reranker-v2-m3`）走 **HuggingFace CrossEncoder**，**不走 Ollama**；
+> 生产默认不挂重排（CPU 太慢），只有跑 `scripts/eval_runner.py --upper-bound` 才会用到，
+> 首次使用会自动从 HuggingFace 下载到 `~/.cache/huggingface/`。
 
 ### 3. 配置环境变量
 
@@ -330,7 +346,7 @@ powershell -ExecutionPolicy Bypass -File start.ps1
 python src/web_app/fastapi_app.py
 ```
 
-浏览器访问 `http://localhost:7862`（首页 `/`、课表 `/schedule`、奖学金 `/scholarship`、校园生活 `/campus`、上传中心 `/upload`、健康检查 `/health`）
+浏览器访问 `http://localhost:7862`（首页 `/`、课表 `/schedule`、奖学金 `/scholarship`、校园生活 `/campus`、上传中心 `/upload`、拍照识图 `/look`、健康检查 `/health`）
 
 > 历史：早期用 Gradio 单页（`src/web_app/app.py`，端口 7861），2026-09-22 起迁移到 FastAPI 多页架构。2026-10-09 正式删除 Gradio 入口，统一只用 FastAPI。
 
@@ -348,24 +364,33 @@ wxu-multimodal-smart-agent/
 │   │   ├── retriever.py        # 混合检索(BM25 + 向量 + RRF)
 │   │   ├── multi_hop.py        # 多跳检索(LLM 拆子问题 + RRF 融合)
 │   │   ├── llm_chain.py        # 问答链 + 引用来源
-│   │   ├── chat_history.py     # 分层对话记忆
-│   │   ├── answer_cache.py     # 答案缓存(Redis → fakeredis → 进程内 LRU)
+│   │   ├── chat_history.py     # 分层对话记忆 + query rewriting
+│   │   ├── query_cache.py      # query embedding 缓存(LRU, TTL 5 分钟)
+│   │   ├── rag_engine.py       # RAG 引擎装配(向量库+检索器+问答链)
+│   │   ├── build_vectorstore.py# 向量库构建入口(断点续跑)
 │   │   └── rag_evaluate.py     # 评估脚本
 │   ├── agent/                  # ReAct Agent
-│   │   ├── react_engine.py     # LangChain AgentExecutor 实现
-│   │   ├── langgraph_engine.py # LangGraph 实现(USE_LANGGRAPH_AGENT 切换)
+│   │   ├── react_engine.py     # 手写 ReAct 循环（bind_tools + tool_calls，无 AgentExecutor）
+│   │   ├── langgraph_engine.py # LangGraph 状态图实现(USE_LANGGRAPH_AGENT 切换)
+│   │   ├── metrics.py          # Agent 侧 Prometheus 埋点(软依赖)
 │   │   └── tools/              # 4 个工具(通知检索 / 课表 / 图片 OCR / 联网)
 │   ├── curriculum/             # 课表解析(班级分桶 + 周次计算)
+│   │   ├── parser.py           # PDF/截图 课表解析入口
+│   │   ├── parser_v2_pdfplumber.py # 表格线识别(优先路径)
+│   │   ├── parser_coords.py    # PyMuPDF 坐标识别(次选路径)
+│   │   └── experiment_parser.py # 实验课表(Excel/CSV/截图)
 │   ├── yolo/                   # 图像识别
 │   │   └── inference.py        # YOLO-World 推理(权重缺失时自动下载)
 │   ├── ocr/                    # 文字识别
 │   │   └── ocr_engine.py       # PaddleOCR 封装
 │   └── web_app/                # Web 应用（FastAPI 多页架构）
 │       ├── fastapi_app.py      # FastAPI 主入口（多页 + REST API）
-│       ├── image_assistant.py  # 图片分发(YOLO/OCR)
+│       ├── image_assistant.py  # 图片分发(YOLO/OCR) —— 已接 /look 页 + /api/image/look
 │       ├── upload_handler.py   # 文档上传处理
+│       ├── answer_cache.py     # 答案缓存(Redis → fakeredis → 进程内 LRU)
 │       ├── user_store.py       # 多用户多 session 管理
 │       ├── monitoring.py        # Prometheus 指标
+│       ├── pages/              # Jinja2 页面(首页 / 课表 / 校园 / 上传 / 拍照识图)
 │       └── agent/              # 意图路由 / memory / dispatcher
 │           ├── dispatcher.py
 │           ├── memory.py
@@ -373,6 +398,12 @@ wxu-multimodal-smart-agent/
 ├── scripts/                    # 工具脚本(爬虫 / 构建 / 评测 / 启动)
 ├── tests/                      # 评估测试集(300 题) + bad case 报告
 ├── docs/                       # 学习指南 / 问题记录 / 面试准备
+├── requirements.txt            # 完整应用依赖
+├── requirements-ci.txt         # CI 最小依赖集(72 包,只够跑单元测试)
+├── docker-compose.yml          # 生产部署（FastAPI + Redis + Ollama + Prometheus + Grafana）
+├── Dockerfile                  # 生产镜像
+├── prometheus.yml              # 抓取配置
+├── prometheus-alerts.yml       # 告警规则
 └── data/                       # 向量库 + 文档(不上传 Git)
 ```
 
@@ -380,12 +411,12 @@ wxu-multimodal-smart-agent/
 
 ## 🔧 关键工程决策
 
-1. **嵌入/重排本地化**：用 Ollama 跑 bge-m3，避免每次检索调 API 产生费用和延迟
+1. **嵌入本地化**：用 Ollama 跑 bge-m3 嵌入，避免每次检索调 API 产生费用和延迟（重排若开启，走 HuggingFace CrossEncoder 本地跑）
 2. **YOLO-World 零样本**：不标注、不训练，直接用文字标签检测校园建筑，快速落地
 3. **分层对话记忆**：近期对话完整保留，早期对话压缩摘要，控制上下文长度
 4. **状态机幂等标记**：向量库构建 `done=True` 仅在所有批次成功时写入，防止残库上线
 5. **沉默降级告警**：reranker 加载失败时显式 warn 而非静默跳过,避免隐性质量下降
-6. **真·ReAct 取代规则路由**:用 LangChain 的 `AgentExecutor`(tool-calling ReAct) + 4 个真实工具(校内 RAG / 我的课表 / 图片 OCR / 联网兜底),由 LLM 自己决策调哪个,**不再走"关键词命中 → 模板套"的老路**;工具异常降级成字符串反馈而不是 crash 整个 agent
+6. **真·ReAct 取代规则路由**:**手写 ReAct 循环**(`src/agent/react_engine.py`：`ChatOpenAI.bind_tools` + 自己解析 `tool_calls` + 最多 5 轮迭代)+ 4 个真实工具(校内 RAG / 我的课表 / 图片 OCR / 联网兜底),由 LLM 自己决策调哪个,**不再走"关键词命中 → 模板套"的老路**;工具异常降级成字符串反馈而不是 crash 整个 agent;另有一套 LangGraph 状态图实现(`src/agent/langgraph_engine.py`),用 `USE_LANGGRAPH_AGENT=1` 切换
 7. **课表班级分桶 + 公共课合并渲染**:`curriculum.class_id` 字段把 PDF 课表按 24电信1/2/3 分桶;实验课截图/Excel 自动按 `user_settings.class_name` 过滤入桶;`load_curriculum(class_id=X)` 一句 SQL 返回 `class_id=X OR class_id IS NULL`,公共课永远可见
 8. **周次自动计算**:开学日 + 当前日 → 第几周 直接用 `(today - start_date).days // 7 + 1` 算出来,夹在 [1, 25] 之间;URL 里 `?week=N` 仍可手动覆盖(便于测试)
 
@@ -421,9 +452,10 @@ python scripts/eval_multihop.py --mode compare
 - ❌ **评估模式 ≠ 线上模式**：评估模式下启用了 BGE-reranker 看上限，但生产为延迟关了它；线上跑出来是 **61.7%** 而不是历史口径的 86.7%（11/26 那次是用 15 题 + 开 reranker 跑出来的）
 - ❌ **合规 prompt 还有 4 题漏**：当前 60 题里 banned 违规 4 次，分别是 ID 17（"复变函数期末考试范围"答案里出现"参考答案"）、ID 19（"复变函数期末试卷"出现"试卷"+"答案"）、ID 22（"奖学金兼得"答案里 banned "可以同时获得" 命中）、ID 59（"今天无锡天气怎么样"答了"我无法知道实时天气"，banned "无法" 没防住）。可见 llm_chain 的合规 prompt 关键词屏蔽不够全面
 - ❌ **多模态端到端没测**：YOLO + OCR + RAG 是分模块集成，测试集里只有"图片后纯文字版近似"；真实拍图 → 自动回答这条路径需要单独 demo 验证
+- ⚠️ **聊天框不支持发图**：拍照识图是**独立页面**（`/look` + `POST /api/image/look`），识别结果只回显在那一页，**不会自动回灌进对话**；Agent 的 `ocr_image` 工具在聊天链路里也拿不到图片（`handle_agent_stream` 支持 `image_path`，但 `/api/chat` 这条路由没传）
 - ❌ **BM25 中文切词覆盖**：jieba 用通用词表，校园特有词（奖学金类型简称、教务系统名）可能没切准，靠 bge-m3 语义救回一部分，但仍有漏网
 - ❌ **合规过滤是关键词级**:`retriever._is_exam_doc` 只看文件名 pattern（"答案"、"A卷"等）；试卷内容被截屏嵌进"教学日历"等正常文档里，是漏网之鱼
-- ❌ **YOLO 校园场景泛化**：YOLO-World 用 50 个左右固定类别（COCO 之外的校园物品）；不在这 50 类里的物体识别不到
+- ❌ **YOLO 校园场景泛化**：YOLO-World 默认用 41 个固定类别（COCO 之外的校园物品，见 `src/yolo/inference.py` 的 `DEFAULT_WORLD_CLASSES`）；不在这 41 类里的物体识别不到（`set_classes()` 可改，但 Web 端暂无入口）
 
 ---
 

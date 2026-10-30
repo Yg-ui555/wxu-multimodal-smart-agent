@@ -32,8 +32,25 @@ log = logging.getLogger("dispatcher")
 # ═══════════════════════════════════════════════════════════════════
 # 2026-10-11 加:.env 里设 USE_LANGGRAPH_AGENT=1 切换到 LangGraph 版
 # 默认 0(react_engine),两者并存,行为对齐
-_USE_LG = os.getenv("USE_LANGGRAPH_AGENT") == "1"
-log.info(f"[dispatcher] Agent engine: {'LangGraph(状态图)' if _USE_LG else 'react_engine(手写循环)'}")
+#
+# 2026-10-30 修复:原来这行在 **import 时** 求值,而且本模块从没调过 load_dotenv()。
+# 于是"谁先 import dispatcher"决定了开关能不能读到 .env ——
+# 单独 import 这个模块(评测脚本 / 单元测试)时,.env 里写了
+# USE_LANGGRAPH_AGENT=1 也完全不生效,永远走 react_engine。
+# 现在:① 模块加载时补一次 load_dotenv();② 改成**调用时**读环境变量。
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:  # pragma: no cover - 没装 python-dotenv 时静默跳过
+    pass
+
+
+def _use_lg() -> bool:
+    """当前是否走 LangGraph 引擎(每次调用时读,不受 import 顺序影响)"""
+    return os.getenv("USE_LANGGRAPH_AGENT") == "1"
+
+
+log.info(f"[dispatcher] Agent engine: {'LangGraph(状态图)' if _use_lg() else 'react_engine(手写循环)'}")
 
 
 # ============== 偏好抽取（"我叫张三"→ name=张三） ==============
@@ -297,7 +314,7 @@ def handle_agent(query: str, uid: str, intent: str, sid: str = "") -> Dict:
     history = _load_session_history(uid, sid) if sid else []
 
     # 3. ★ 开关决定走哪个 Agent 引擎
-    if _USE_LG:
+    if _use_lg():
         from src.agent.langgraph_engine import agent_run
         result = agent_run(
             user_query=query,
@@ -345,7 +362,7 @@ def handle_agent_stream(query: str, uid: str, intent: str, sid: str = "",
     history = _load_session_history(uid, sid) if sid else []
 
     # ★ 开关决定走哪个 Agent 引擎
-    if _USE_LG:
+    if _use_lg():
         from src.agent.langgraph_engine import agent_stream
         for chunk in agent_stream(
             user_query=query,

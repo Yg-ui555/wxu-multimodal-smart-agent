@@ -10,9 +10,9 @@
     <span class="wxu-ticker-item"><span class="sep">·</span>🌅 校园通知每日自动更新</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>📸 截图文字一键识别</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>🎯 答得上来 <span class="num">62%</span>（60 题线上实测）</span>
-    <span class="wxu-ticker-item"><span class="sep">·</span>⚡ <span class="num">23</span> 分钟前刚同步</span>
-    <span class="wxu-ticker-item"><span class="sep">·</span>🏫 覆盖 <span class="num">7</span> 个校内网站</span>
-    <span class="wxu-ticker-item"><span class="sep">·</span>📷 图片物体识别已就绪</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>⚡ <span id="stat-sync">上次同步时间加载中…</span></span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>🏫 覆盖 <span class="num" id="stat-sites2">—</span> 个校内网站</span>
+    <span class="wxu-ticker-item"><span class="sep">·</span>📷 拍照识图(认物 + 识字)已上线</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>💬 试试问"今天有啥课"</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>📅 课表 PDF 自动解析</span>
     <span class="wxu-ticker-item"><span class="sep">·</span>🏆 奖助申请攻略全收录</span>
@@ -104,11 +104,11 @@
         <a class="more" href="/campus">详情 →</a>
       </div>
       <div class="wxu-side-stat">
-        <span class="num">29,377</span>
+        <span class="num" id="stat-doc-count">—</span>
         <span class="label">条 · 已收录</span>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-mute);padding-top:12px;border-top:1px dashed var(--mist);">
-        <span>📚 <b style="color:var(--accent-deep);">7</b> 个网站</span>
+        <span>📚 <b style="color:var(--accent-deep);" id="stat-sites">—</b> 个网站</span>
         <span>🎯 <b style="color:var(--accent-deep);">62%</b> 答得上（60 题实测）</span>
         <span>🔄 每日更新</span>
       </div>
@@ -174,7 +174,7 @@
       <div style="font-size:13px;line-height:1.9;color:#CBD5E1;">
         <div>🌅 校园通知每日自动更新</div>
         <div>📸 截图文字一键识别</div>
-        <div>📷 图片物体识别已就绪</div>
+        <div>📷 拍照识图(认物 + 识字)已上线</div>
         <div>📅 课表 PDF 自动解析</div>
         <div>💬 24 小时在线问答</div>
       </div>
@@ -186,6 +186,51 @@
 
 {% block extra_script %}
 <script>
+// ============ 运行时统计(2026-10-30 新增) ============
+// 原来首页的 "29,377 条""7 个网站""23 分钟前刚同步" 是**写死在 HTML 里**的:
+//   - 条数早就过期了(实测 29,631)
+//   - "23 分钟前" 更是假的 —— 不管什么时候打开页面都是 23 分钟前
+// 改成运行时从 GET /api/stats 取真实值:
+//   - 知识库条数 = FAISS 索引头的 ntotal
+//   - 站点数     = scripts/daily_crawl.py 里 WATCHED_PAGES 的 host 数
+//   - 同步时间   = logs/crawl_state.json 的 last_run
+function fmtAgo(iso) {
+  if (!iso) return '上次同步时间未知';
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return '上次同步时间未知';
+  const diffMin = Math.floor((Date.now() - t) / 60000);
+  if (diffMin < 1) return '刚刚同步过';
+  if (diffMin < 60) return diffMin + ' 分钟前同步';
+  if (diffMin < 1440) return Math.floor(diffMin / 60) + ' 小时前同步';
+  return Math.floor(diffMin / 1440) + ' 天前同步';
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const s = await r.json();
+
+    const docEl = document.getElementById('stat-doc-count');
+    if (docEl && s.doc_count) docEl.textContent = s.doc_count.toLocaleString('en-US');
+
+    if (s.sites) {
+      ['stat-sites', 'stat-sites2'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = s.sites;
+      });
+    }
+
+    const syncEl = document.getElementById('stat-sync');
+    if (syncEl) syncEl.textContent = fmtAgo(s.last_run);
+  } catch (e) {
+    console.warn('加载统计失败', e);
+    const syncEl = document.getElementById('stat-sync');
+    if (syncEl) syncEl.textContent = '同步时间获取失败';
+  }
+}
+loadStats();
+
 // ============ 多 Session + 多轮对话(2026-09-24 新增) ============
 // 后端 5 个 API:
 //   GET   /api/session/list     → 列出所有 session
@@ -226,10 +271,18 @@ function appendMsg(role, text) {
 }
 
 // 2026-09-24 加:markdown 渲染(marked + highlight.js 代码高亮)
+//
+// 2026-10-30 安全修复:原来注释写"marked 12.x 默认已经转义 HTML,安全" —— **这是错的**。
+// marked 从 v5 起就移除了 sanitize 选项,markdown 里的原始 HTML 默认**原样透传**。
+// 实测本仓库的 marked 12.0.2:'<img src=x onerror=alert(1)>' 解析后原封不动,
+// 再塞进 innerHTML 就是**存储型 XSS** —— 只要抓取到的通知里带一段 HTML 就能触发。
+// 修法:覆写 renderer.html,把裸 HTML 块转义成纯文本。
+// 只影响"裸 HTML 块",代码块(<pre><code>)由 marked 自己的 codespan 转义,不受影响。
 function renderMarkdown(container, text) {
   try {
-    // marked 12.x 默认已经转义 HTML,安全
-    const html = marked.parse(text || '', {breaks: true, gfm: true});
+    const renderer = new marked.Renderer();
+    renderer.html = function (rawHtml) { return escapeHtml(rawHtml); };
+    const html = marked.parse(text || '', {breaks: true, gfm: true, renderer: renderer});
     container.innerHTML = html;
     // 给所有 <pre><code> 调高亮(如果有 hljs)
     if (window.hljs) {

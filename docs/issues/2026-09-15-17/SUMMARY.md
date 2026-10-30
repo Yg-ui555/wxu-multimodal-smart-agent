@@ -11,9 +11,9 @@
 
 | 日期 | 主线 | 关键产出 | 当日 issue |
 |---|---|---|---|
-| **9/15 周一** | 构建 bge 向量库 → 反复失败 → 自动化监督 | 533 文件 / 12334 chunks / 119MB FAISS | [issues/2026-09-15/README.md](2026-09-15/README.md) |
-| **9/16 周二** | 21 题审计 + 4 类失败修复 + 数据采集升级 + bge-m3 全量重建 | bge-m3 1024-dim / 29165 chunks / 6 类修复 | [issues/2026-09-16/README.md](2026-09-16/README.md) |
-| **9/17 周三** | 切库 → 14 处 bug 修复 → 上传 → 多用户多 session → 豆包式 UI → 评估仪表盘 | monkey-patch / 14 处 fix / upload / multi-session / eval pipeline | [issues/2026-09-17/README.md](2026-09-17/README.md) |
+| **9/15 周一** | 构建 bge 向量库 → 反复失败 → 自动化监督 | 533 文件 / 12334 chunks / 119MB FAISS | [issues/2026-09-15/README.md](../2026-09-15/README.md) |
+| **9/16 周二** | 21 题审计 + 4 类失败修复 + 数据采集升级 + bge-m3 全量重建 | bge-m3 1024-dim / 29165 chunks / 6 类修复 | [issues/2026-09-16/README.md](../2026-09-16/README.md) |
+| **9/17 周三** | 切库 → 14 处 bug 修复 → 上传 → 多用户多 session → 豆包式 UI → 评估仪表盘 | monkey-patch / 14 处 fix / upload / multi-session / eval pipeline | [issues/2026-09-17/README.md](../2026-09-17/README.md) |
 
 ---
 
